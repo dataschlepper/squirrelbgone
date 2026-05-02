@@ -1,0 +1,16 @@
+# Credentials
+.env
+*.key
+
+# Data (too large for git)
+logs/
+frames/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+sbg-env/
+
+# macOS
+.DS_Store

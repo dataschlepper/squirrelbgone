@@ -14,3 +14,16 @@ sbg-env/
 
 # macOS
 .DS_Store
+
+# VS Code
+.vscode/
+
+# Roboflow
+Squirrel-Detector-1.1-1/
+
+# local artifacts
+frames/
+logs/
+*.csv
+detect/
+runs/

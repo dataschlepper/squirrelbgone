@@ -1,0 +1,59 @@
+# config.example.yaml
+# Copy to config.yaml and fill in your values.
+# config.yaml is gitignored — never commit API keys.
+
+# ── Camera ────────────────────────────────────────────────────────────────────
+camera:
+  rtsp_url: "rtsp://<username>:<password>@<camera-ip>:554/h264Preview_01_main"
+  # Use h264Preview_01_sub for lower-res / lower-latency sub stream:
+  # rtsp_url: "rtsp://<username>:<password>@<camera-ip>:554/h264Preview_01_sub"
+
+# ── Inference ─────────────────────────────────────────────────────────────────
+inference:
+  roboflow_api_key: "YOUR_ROBOFLOW_API_KEY"
+  roboflow_model_id: "squirrels-birds/1"   # workspace/model-name/version
+  confidence_threshold: 0.70               # minimum confidence to trigger spray
+  review_threshold: 0.85                   # below this → flagged for nightly AI review
+
+# ── Trigger classes ───────────────────────────────────────────────────────────
+classes:
+  trigger:   ["squirrel"]                  # classes that fire the solenoid
+  suppress:  ["bird", "shadow"]            # logged only, never trigger
+
+# ── GPIO ──────────────────────────────────────────────────────────────────────
+gpio:
+  pin: 17                                  # BCM pin number connected to relay signal
+  active_high: false                       # JBtek relay module is active-low
+
+# ── Spray ─────────────────────────────────────────────────────────────────────
+spray:
+  duration_sec: 1.5                        # how long to open the solenoid per trigger
+  cooldown_sec: 30                         # minimum seconds between spray events
+
+# ── Schedule ──────────────────────────────────────────────────────────────────
+schedule:
+  day_start: [7, 0]                        # [hour, minute] — no triggers before this
+  day_end:   [20, 0]                       # [hour, minute] — no triggers after this
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  detection_log: "logs/detections.csv"
+  trigger_log:   "logs/triggers.csv"
+  correction_log: "logs/corrections.csv"
+  frame_dir:     "frames/"
+  save_trigger_frames: true
+  save_review_frames: true                 # save low-confidence frames for nightly review
+
+# ── Nightly AI review ─────────────────────────────────────────────────────────
+ai_review:
+  enabled: false                           # set true once Phase 4 is active
+  provider: "anthropic"                    # "anthropic" or "openai"
+  anthropic_api_key: "YOUR_ANTHROPIC_API_KEY"
+  openai_api_key: "YOUR_OPENAI_API_KEY"
+  model: "claude-opus-4-5"               # or "gpt-4o"
+  cron: "0 2 * * *"                        # 2am nightly
+
+# ── API server (Phase 4) ──────────────────────────────────────────────────────
+api:
+  host: "0.0.0.0"
+  port: 8000

@@ -145,7 +145,7 @@ Full config with comments: `config.example.yaml`
 
 ## Log schemas
 
-**`logs/detections.csv`** — every inference result:
+**`logs/detections_YYYY-MM-DD.csv`** — every inference result (one file per day, rolls over at midnight):
 `timestamp, class, confidence, triggered, frame_path, bbox_x, bbox_y, bbox_w, bbox_h`
 
 **`logs/triggers.csv`** — spray events only:

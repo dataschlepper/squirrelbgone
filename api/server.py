@@ -89,6 +89,10 @@ HTML = """<!DOCTYPE html>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #111; color: #eee; }
 
+    /* ── Layout container ───────────────────────────────────────────────── */
+    #page { max-width: 1400px; margin: 0 auto; }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
     header {
       position: sticky; top: 0; z-index: 10;
       padding: 12px 16px; background: #1a1a1a;
@@ -104,6 +108,7 @@ HTML = """<!DOCTYPE html>
     }
     #refresh-btn:active { background: #333; }
 
+    /* ── Controls ───────────────────────────────────────────────────────── */
     #controls {
       padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
       border-bottom: 1px solid #2a2a2a;
@@ -118,6 +123,7 @@ HTML = """<!DOCTYPE html>
     .ctrl-btn.active.squirrel  { background: #451a03; color: #f59e0b; border-color: #7c3b0a; }
     .ctrl-btn.active.bird      { background: #0c1a40; color: #60a5fa; border-color: #1e3a8a; }
 
+    /* ── Summary pills ──────────────────────────────────────────────────── */
     #summary {
       display: flex; gap: 8px; padding: 10px 12px;
       font-size: 0.8rem;
@@ -126,7 +132,13 @@ HTML = """<!DOCTYPE html>
     .pill.squirrel { background: #451a03; color: #f59e0b; }
     .pill.bird     { background: #0c1a40; color: #60a5fa; }
 
-    #cards { padding: 0 12px 24px; display: flex; flex-direction: column; gap: 10px; }
+    /* ── Cards grid ─────────────────────────────────────────────────────── */
+    #cards {
+      padding: 0 12px 24px;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
 
     .card {
       background: #1a1a1a; border-radius: 10px;
@@ -165,7 +177,7 @@ HTML = """<!DOCTYPE html>
 
     #empty { text-align: center; color: #555; padding: 60px 20px; font-size: 0.9rem; }
 
-    /* Lightbox */
+    /* ── Lightbox ───────────────────────────────────────────────────────── */
     #lightbox {
       display: none; position: fixed; inset: 0; z-index: 100;
       background: rgba(0,0,0,0.95); overflow: auto;
@@ -180,9 +192,23 @@ HTML = """<!DOCTYPE html>
       border-radius: 50%; width: 36px; height: 36px;
       font-size: 1rem; cursor: pointer;
     }
+
+    /* ── Desktop ────────────────────────────────────────────────────────── */
+    @media (min-width: 700px) {
+      #controls { flex-direction: row; }
+      .ctrl-row { flex: 1; }
+
+      #cards { grid-template-columns: 1fr 1fr; }
+      .img-wrap img { max-height: none; }
+    }
+
+    @media (min-width: 1100px) {
+      #cards { grid-template-columns: 1fr 1fr 1fr; }
+    }
   </style>
 </head>
 <body>
+<div id="page">
   <header>
     <div>
       <h1>SquirrelBGone</h1>
@@ -206,6 +232,8 @@ HTML = """<!DOCTYPE html>
 
   <div id="summary"></div>
   <div id="cards"></div>
+
+</div><!-- #page -->
 
   <div id="lightbox" onclick="handleLbClick(event)">
     <div id="lb-wrap">

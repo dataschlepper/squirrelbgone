@@ -22,6 +22,11 @@ load_dotenv()
 LOG_DIR    = Path(os.environ.get("LOG_DIR",    "logs"))
 FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", "frames"))
 
+# Minimum confidence logged by detect.py
+LOG_THRESHOLD  = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.45"))
+# Threshold above which a detection is considered a reliable true positive
+HIGH_CONF_THRESHOLD = float(os.environ.get("HIGH_CONF_THRESHOLD", "0.70"))
+
 CORRECTIONS_PATH   = LOG_DIR / "corrections.csv"
 CORRECTION_FIELDS  = ["flagged_at", "detection_timestamp", "class", "confidence", "frame_path"]
 
@@ -53,6 +58,11 @@ def _read_recent(minutes: int) -> list[dict]:
 
     rows.sort(key=lambda r: r["timestamp"], reverse=True)
     return rows
+
+
+@app.get("/api/config")
+def get_config():
+    return {"log_threshold": LOG_THRESHOLD, "high_conf_threshold": HIGH_CONF_THRESHOLD}
 
 
 @app.get("/api/detections")
@@ -227,6 +237,7 @@ HTML = """<!DOCTYPE html>
       <button class="ctrl-btn cls-btn active"          data-f="all"      onclick="setFilter('all')">All</button>
       <button class="ctrl-btn cls-btn squirrel"        data-f="squirrel" onclick="setFilter('squirrel')">Squirrel</button>
       <button class="ctrl-btn cls-btn bird"            data-f="bird"     onclick="setFilter('bird')">Bird</button>
+      <button class="ctrl-btn hc-btn"                  id="hc-btn"       onclick="toggleHighConf()">&#x2265;<span id="hc-label">70</span>%</button>
     </div>
   </div>
 
@@ -247,8 +258,10 @@ HTML = """<!DOCTYPE html>
     const BOX_COLOR = { squirrel: '#f59e0b', bird: '#3b82f6' };
     function boxColor(cls) { return BOX_COLOR[cls] || '#fff'; }
 
-    let currentWindow = 60;
-    let currentFilter = 'all';
+    let currentWindow   = 60;
+    let currentFilter   = 'all';
+    let highConfOnly    = false;
+    let highConfThresh  = 0.70;
     let allData = [];
     let lbData  = null;
     const flaggedSet = new Set();
@@ -280,10 +293,18 @@ HTML = """<!DOCTYPE html>
       render();
     }
 
+    function toggleHighConf() {
+      highConfOnly = !highConfOnly;
+      document.getElementById('hc-btn').classList.toggle('active', highConfOnly);
+      render();
+    }
+
     function filtered() {
-      if (currentFilter === 'squirrel') return allData.filter(d => d.class === 'squirrel');
-      if (currentFilter === 'bird')     return allData.filter(d => BIRD_CLASSES.has(d.class));
-      return allData;
+      let rows = allData;
+      if (currentFilter === 'squirrel') rows = rows.filter(d => d.class === 'squirrel');
+      else if (currentFilter === 'bird') rows = rows.filter(d => BIRD_CLASSES.has(d.class));
+      if (highConfOnly) rows = rows.filter(d => parseFloat(d.confidence) >= highConfThresh);
+      return rows;
     }
 
     function flagId(ts) { return 'flag-' + ts.replace(/:/g, '-'); }
@@ -449,7 +470,17 @@ HTML = """<!DOCTYPE html>
       render();
     }
 
-    load();
+    async function init() {
+      try {
+        const cfg = await (await fetch('/api/config')).json();
+        highConfThresh = cfg.high_conf_threshold;
+        const pct = Math.round(highConfThresh * 100);
+        document.getElementById('hc-label').textContent = pct;
+      } catch (e) { /* use default */ }
+      load();
+    }
+
+    init();
     setInterval(load, 30000);
   </script>
 </body>

@@ -200,14 +200,16 @@ HTML = """<!DOCTYPE html>
       if (!lbData || !lbData.w || !lbData.h) return;
       const img    = document.getElementById('lb-img');
       const canvas = document.getElementById('lb-canvas');
-      canvas.width  = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      canvas.style.width  = img.naturalWidth  + 'px';
-      canvas.style.height = img.naturalHeight + 'px';
+      canvas.width  = img.clientWidth;
+      canvas.height = img.clientHeight;
+      canvas.style.width  = img.clientWidth  + 'px';
+      canvas.style.height = img.clientHeight + 'px';
+      const sx = img.clientWidth  / img.naturalWidth;
+      const sy = img.clientHeight / img.naturalHeight;
       const ctx = canvas.getContext('2d');
       ctx.strokeStyle = boxColor(lbData.cls);
       ctx.lineWidth = 4;
-      ctx.strokeRect(lbData.x1, lbData.y1, lbData.w, lbData.h);
+      ctx.strokeRect(lbData.x1 * sx, lbData.y1 * sy, lbData.w * sx, lbData.h * sy);
     }
 
     function closeLightbox() {

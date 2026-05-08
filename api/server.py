@@ -102,10 +102,16 @@ HTML = """<!DOCTYPE html>
     .card.squirrel { border-left-color: #f59e0b; }
     .card.bird     { border-left-color: #3b82f6; }
 
-    .card img {
+    .img-wrap { position: relative; cursor: zoom-in; }
+    .img-wrap img {
       width: 100%; display: block;
       max-height: 220px; object-fit: cover; background: #222;
     }
+    .bbox-canvas {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%; pointer-events: none;
+    }
+
     .card-body {
       padding: 10px 12px;
       display: flex; justify-content: space-between; align-items: center;
@@ -117,6 +123,22 @@ HTML = """<!DOCTYPE html>
     .conf { font-size: 1.2rem; font-weight: 700; }
 
     #empty { text-align: center; color: #555; padding: 60px 20px; font-size: 0.9rem; }
+
+    /* Lightbox */
+    #lightbox {
+      display: none; position: fixed; inset: 0; z-index: 100;
+      background: rgba(0,0,0,0.95); overflow: auto;
+    }
+    #lightbox.open { display: block; }
+    #lb-wrap { position: relative; display: inline-block; min-width: 100%; min-height: 100%; }
+    #lb-img { display: block; max-width: 100vw; }
+    #lb-canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+    #lb-close {
+      position: fixed; top: 12px; right: 12px; z-index: 101;
+      background: rgba(0,0,0,0.7); color: #fff; border: none;
+      border-radius: 50%; width: 36px; height: 36px;
+      font-size: 1rem; cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -131,7 +153,76 @@ HTML = """<!DOCTYPE html>
   <div id="summary"></div>
   <div id="cards"></div>
 
+  <div id="lightbox" onclick="handleLbClick(event)">
+    <div id="lb-wrap">
+      <img id="lb-img" onload="drawLbBox()">
+      <canvas id="lb-canvas"></canvas>
+    </div>
+  </div>
+  <button id="lb-close" style="display:none" onclick="closeLightbox()">✕</button>
+
   <script>
+    const BOX_COLOR = { squirrel: '#f59e0b', bird: '#3b82f6' };
+    let lbData = null;
+
+    function boxColor(cls) { return BOX_COLOR[cls] || '#fff'; }
+
+    function drawBox(img) {
+      const x1 = +img.dataset.x1, y1 = +img.dataset.y1;
+      const w  = +img.dataset.w,  h  = +img.dataset.h;
+      if (!w || !h) return;
+      const canvas = img.nextElementSibling;
+      canvas.width  = img.clientWidth;
+      canvas.height = img.clientHeight;
+      const sx = img.clientWidth  / img.naturalWidth;
+      const sy = img.clientHeight / img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.strokeStyle = boxColor(img.dataset.cls);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x1 * sx, y1 * sy, w * sx, h * sy);
+    }
+
+    function openLightbox(imgEl) {
+      lbData = {
+        src: imgEl.src,
+        x1: +imgEl.dataset.x1, y1: +imgEl.dataset.y1,
+        w:  +imgEl.dataset.w,  h:  +imgEl.dataset.h,
+        cls: imgEl.dataset.cls,
+      };
+      const lb = document.getElementById('lightbox');
+      document.getElementById('lb-img').src = lbData.src;
+      lb.scrollTop = 0; lb.scrollLeft = 0;
+      lb.classList.add('open');
+      document.getElementById('lb-close').style.display = 'block';
+    }
+
+    function drawLbBox() {
+      if (!lbData || !lbData.w || !lbData.h) return;
+      const img    = document.getElementById('lb-img');
+      const canvas = document.getElementById('lb-canvas');
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.style.width  = img.naturalWidth  + 'px';
+      canvas.style.height = img.naturalHeight + 'px';
+      const ctx = canvas.getContext('2d');
+      ctx.strokeStyle = boxColor(lbData.cls);
+      ctx.lineWidth = 4;
+      ctx.strokeRect(lbData.x1, lbData.y1, lbData.w, lbData.h);
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.remove('open');
+      document.getElementById('lb-close').style.display = 'none';
+      document.getElementById('lb-img').src = '';
+      lbData = null;
+    }
+
+    function handleLbClick(e) {
+      if (e.target.id === 'lightbox' || e.target.id === 'lb-wrap') closeLightbox();
+    }
+
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+
     function ago(isoStr) {
       const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
       if (diff < 60)   return diff + 's ago';
@@ -172,12 +263,17 @@ HTML = """<!DOCTYPE html>
       cards.innerHTML = data.map(d => {
         const cls  = (d.class || 'unknown').toLowerCase();
         const conf = Math.round(parseFloat(d.confidence) * 100);
-        const img  = d.image_url
-          ? `<img src="${d.image_url}" alt="${cls}" loading="lazy">`
-          : '';
+        const imgHtml = d.image_url ? `
+          <div class="img-wrap" onclick="openLightbox(this.querySelector('img'))">
+            <img src="${d.image_url}" alt="${cls}" loading="lazy"
+                 data-x1="${d.x1 || 0}" data-y1="${d.y1 || 0}"
+                 data-w="${d.w || 0}"   data-h="${d.h || 0}"
+                 data-cls="${cls}" onload="drawBox(this)">
+            <canvas class="bbox-canvas"></canvas>
+          </div>` : '';
         return `
           <div class="card ${cls}">
-            ${img}
+            ${imgHtml}
             <div class="card-body">
               <div>
                 <div class="cls ${cls}">${cls}</div>

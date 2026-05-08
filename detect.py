@@ -4,6 +4,12 @@ SquirrelBGone — detect.py
 Phase 1: Detection only. Reads RTSP stream, runs YOLOv8 inference locally,
 prints detections + logs to CSV with saved frames.
 
+Runs two models per frame:
+  - Primary squirrel model (MODEL_PATH) — single-class squirrel detector
+  - Bird suppression model (MODEL_PATH_BIRD, default yolov8n.pt) — COCO model;
+    if a bird is present in the same frame as a squirrel, the squirrel trigger
+    is suppressed (both are still logged)
+
 Requirements:
     pip install ultralytics opencv-python python-dotenv
 
@@ -28,10 +34,12 @@ load_dotenv()
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 
-RTSP_URL             = os.environ.get("RTSP_URL", "")
-MODEL_PATH           = os.environ.get("MODEL_PATH", "squirrel_detector.pt")
-TARGET_FPS           = int(os.environ.get("TARGET_FPS", "5"))
-CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.45"))
+RTSP_URL                  = os.environ.get("RTSP_URL", "")
+MODEL_PATH                = os.environ.get("MODEL_PATH", "squirrel_detector.pt")
+MODEL_PATH_BIRD           = os.environ.get("MODEL_PATH_BIRD", "yolov8n.pt")
+TARGET_FPS                = int(os.environ.get("TARGET_FPS", "5"))
+CONFIDENCE_THRESHOLD      = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.45"))
+BIRD_CONFIDENCE_THRESHOLD = float(os.environ.get("BIRD_CONFIDENCE_THRESHOLD", "0.45"))
 
 # Where to write logs and saved frames
 LOG_DIR    = Path(os.environ.get("LOG_DIR", "logs"))
@@ -119,20 +127,21 @@ def main():
         )
         sys.exit(1)
 
-    # Create output dirs
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Load model
-    log.info(f"Loading model: {MODEL_PATH}")
     from ultralytics import YOLO
-    model = YOLO(MODEL_PATH)
-    log.info("Model loaded.")
 
-    # Open CSV
+    log.info(f"Loading squirrel model: {MODEL_PATH}")
+    squirrel_model = YOLO(MODEL_PATH)
+    log.info("Squirrel model loaded.")
+
+    log.info(f"Loading bird model: {MODEL_PATH_BIRD}")
+    bird_model = YOLO(MODEL_PATH_BIRD)
+    log.info("Bird model loaded.")
+
     csv_fh, csv_writer = open_csv(LOG_DIR)
 
-    # Open stream
     log.info(f"Connecting to stream: {RTSP_URL}")
     cap = _open_stream(RTSP_URL)
     if cap is None:
@@ -144,12 +153,16 @@ def main():
         )
         sys.exit(1)
 
-    log.info(f"Stream open. {TARGET_FPS}fps · threshold={CONFIDENCE_THRESHOLD}")
+    log.info(
+        f"Stream open. {TARGET_FPS}fps · "
+        f"squirrel threshold={CONFIDENCE_THRESHOLD} · "
+        f"bird threshold={BIRD_CONFIDENCE_THRESHOLD}"
+    )
     log.info("Watching… (Ctrl+C to stop)\n")
 
-    frame_interval  = 1.0 / TARGET_FPS
-    last_frame_time = 0.0
-    current_date    = datetime.date.today()
+    frame_interval    = 1.0 / TARGET_FPS
+    last_frame_time   = 0.0
+    current_date      = datetime.date.today()
     reconnect_attempt = 0
 
     try:
@@ -162,10 +175,10 @@ def main():
                 cap, reconnect_attempt = _reconnect(RTSP_URL, reconnect_attempt)
                 if cap is None:
                     continue
-                last_frame_time = 0.0  # drain any buffered frames after reconnect
+                last_frame_time = 0.0
                 continue
 
-            reconnect_attempt = 0  # reset on any successful read
+            reconnect_attempt = 0
 
             if (now - last_frame_time) < frame_interval:
                 continue
@@ -178,31 +191,46 @@ def main():
                 csv_fh, csv_writer = open_csv(LOG_DIR)
                 current_date = today
 
-            # Inference
-            results = model(frame, verbose=False)[0]
+            # ── Inference ────────────────────────────────────────────────────
+            squirrel_results = squirrel_model(frame, verbose=False)[0]
+            bird_results     = bird_model(frame, verbose=False)[0]
 
-            for box in results.boxes:
+            squirrel_boxes = [
+                box for box in squirrel_results.boxes
+                if float(box.conf[0]) >= CONFIDENCE_THRESHOLD
+                and squirrel_model.names[int(box.cls[0])].lower() == "squirrel"
+            ]
+
+            # Filter COCO output to "bird" class only
+            bird_boxes = [
+                box for box in bird_results.boxes
+                if float(box.conf[0]) >= BIRD_CONFIDENCE_THRESHOLD
+                and bird_model.names[int(box.cls[0])].lower() == "bird"
+            ]
+
+            if not squirrel_boxes and not bird_boxes:
+                continue
+
+            frame_has_bird = len(bird_boxes) > 0
+            ts = datetime.datetime.now().isoformat(timespec="seconds")
+
+            # Save one frame per inference pass; name by dominant class
+            prefix = "squirrel" if squirrel_boxes else "bird"
+            frame_filename = f"{ts.replace(':', '-')}_{prefix}.jpg"
+            frame_path = FRAMES_DIR / frame_filename
+            cv2.imwrite(str(frame_path), frame)
+
+            # ── Log squirrel detections ───────────────────────────────────────
+            for box in squirrel_boxes:
                 conf = float(box.conf[0])
-                if conf < CONFIDENCE_THRESHOLD:
-                    continue
-
-                cls_name = model.names[int(box.cls[0])].lower()
-                # Only TRIGGER_CLASSES fire the sprayer — benign and unknown classes never trigger
-                triggered = cls_name in TRIGGER_CLASSES
+                triggered = not frame_has_bird  # suppress if bird co-present
                 x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
                 w = x2 - x1
                 h = y2 - y1
-                ts = datetime.datetime.now().isoformat(timespec="seconds")
 
-                # Save frame
-                frame_filename = f"{ts.replace(':', '-')}_{cls_name}_{conf:.2f}.jpg"
-                frame_path = FRAMES_DIR / frame_filename
-                cv2.imwrite(str(frame_path), frame)
-
-                # Write CSV row
                 csv_writer.writerow({
                     "timestamp":  ts,
-                    "class":      cls_name,
+                    "class":      "squirrel",
                     "confidence": round(conf, 4),
                     "triggered":  triggered,
                     "x1": x1, "y1": y1, "w": w, "h": h,
@@ -210,15 +238,29 @@ def main():
                 })
                 csv_fh.flush()
 
-                # Console
-                if cls_name in TRIGGER_CLASSES:
-                    icon = "🐿️  SQUIRREL"
-                elif cls_name in BENIGN_CLASSES:
-                    icon = "🐦  bird"
+                if triggered:
+                    log.info(f"🐿️  SQUIRREL          conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
                 else:
-                    icon = f"   {cls_name}"
+                    log.info(f"🐿️  squirrel [suppressed — bird present]  conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
 
-                log.info(f"{icon:<22}  conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
+            # ── Log bird detections ───────────────────────────────────────────
+            for box in bird_boxes:
+                conf = float(box.conf[0])
+                x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                w = x2 - x1
+                h = y2 - y1
+
+                csv_writer.writerow({
+                    "timestamp":  ts,
+                    "class":      "bird",
+                    "confidence": round(conf, 4),
+                    "triggered":  False,
+                    "x1": x1, "y1": y1, "w": w, "h": h,
+                    "frame_path": str(frame_path),
+                })
+                csv_fh.flush()
+
+                log.info(f"🐦  bird               conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
 
     finally:
         cap.release()

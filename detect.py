@@ -66,7 +66,7 @@ signal.signal(signal.SIGTERM, _shutdown)
 
 # ─── CSV ──────────────────────────────────────────────────────────────────────
 
-CSV_FIELDS = ["timestamp", "class", "confidence", "x1", "y1", "w", "h", "frame_path"]
+CSV_FIELDS = ["timestamp", "class", "confidence", "triggered", "x1", "y1", "w", "h", "frame_path"]
 
 def open_csv(log_dir: Path):
     """Open (or append to) today's detection log. Returns (file_handle, csv_writer)."""
@@ -187,6 +187,8 @@ def main():
                     continue
 
                 cls_name = model.names[int(box.cls[0])].lower()
+                # Only TRIGGER_CLASSES fire the sprayer — benign and unknown classes never trigger
+                triggered = cls_name in TRIGGER_CLASSES
                 x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
                 w = x2 - x1
                 h = y2 - y1
@@ -202,6 +204,7 @@ def main():
                     "timestamp":  ts,
                     "class":      cls_name,
                     "confidence": round(conf, 4),
+                    "triggered":  triggered,
                     "x1": x1, "y1": y1, "w": w, "h": h,
                     "frame_path": str(frame_path),
                 })

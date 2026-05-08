@@ -77,11 +77,25 @@ signal.signal(signal.SIGTERM, _shutdown)
 CSV_FIELDS = ["timestamp", "class", "confidence", "triggered", "x1", "y1", "w", "h", "frame_path"]
 
 def open_csv(log_dir: Path):
-    """Open (or append to) today's detection log. Returns (file_handle, csv_writer)."""
+    """Open (or append to) today's detection log. Returns (file_handle, csv_writer).
+    If an existing file has a mismatched header, archives it and starts fresh."""
     log_dir.mkdir(parents=True, exist_ok=True)
     date_str = datetime.date.today().isoformat()
     csv_path = log_dir / f"detections_{date_str}.csv"
-    is_new = not csv_path.exists()
+
+    if csv_path.exists():
+        with open(csv_path, newline="") as chk:
+            existing_header = next(csv.reader(chk), [])
+        if existing_header != CSV_FIELDS:
+            archive = csv_path.with_name(f"detections_{date_str}_legacy_{int(time.time())}.csv")
+            csv_path.rename(archive)
+            log.warning(f"CSV schema changed — archived old log to {archive.name}")
+            is_new = True
+        else:
+            is_new = False
+    else:
+        is_new = True
+
     fh = open(csv_path, "a", newline="")
     writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
     if is_new:

@@ -54,7 +54,7 @@ BENIGN_CLASSES  = {"bird", "crow", "pigeon", "robin", "sparrow"}
 # ─── LOGGING ──────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s  %(message)s",
     datefmt="%H:%M:%S",
 )
@@ -221,6 +221,13 @@ def main():
                 if float(box.conf[0]) >= BIRD_CONFIDENCE_THRESHOLD
                 and bird_model.names[int(box.cls[0])].lower() == "bird"
             ]
+
+            # DEBUG: log all COCO detections to see what the model is finding
+            for box in bird_results.boxes:
+                name = bird_model.names[int(box.cls[0])].lower()
+                conf = float(box.conf[0])
+                if name == "bird":
+                    log.debug(f"[coco-raw] bird conf={conf:.3f} (threshold={BIRD_CONFIDENCE_THRESHOLD})")
 
             if not squirrel_boxes and not bird_boxes:
                 continue

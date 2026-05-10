@@ -4,11 +4,14 @@ SquirrelBGone — detect.py
 Phase 1: Detection only. Reads RTSP stream, runs YOLOv8 inference locally,
 prints detections + logs to CSV with saved frames.
 
-Runs two models per frame:
+Runs up to three models per frame:
   - Primary squirrel model (MODEL_PATH) — single-class squirrel detector
   - Bird suppression model (MODEL_PATH_BIRD, default yolov8n.pt) — COCO model;
     if a bird is present in the same frame as a squirrel, the squirrel trigger
     is suppressed (both are still logged)
+  - Wildlife suppression model (MODEL_PATH_WILDLIFE, optional) — e.g. a Roboflow
+    backyard-wildlife model; if deer/fox/raccoon/etc. are present, the squirrel
+    trigger is suppressed and the wildlife class is logged
 
 Requirements:
     pip install ultralytics opencv-python python-dotenv
@@ -38,8 +41,10 @@ RTSP_URL                  = os.environ.get("RTSP_URL", "")
 MODEL_PATH                = os.environ.get("MODEL_PATH", "squirrel_detector.pt")
 MODEL_PATH_BIRD           = os.environ.get("MODEL_PATH_BIRD", "yolov8n.pt")
 TARGET_FPS                = int(os.environ.get("TARGET_FPS", "5"))
-CONFIDENCE_THRESHOLD      = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.45"))
-BIRD_CONFIDENCE_THRESHOLD = float(os.environ.get("BIRD_CONFIDENCE_THRESHOLD", "0.45"))
+CONFIDENCE_THRESHOLD         = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.45"))
+BIRD_CONFIDENCE_THRESHOLD    = float(os.environ.get("BIRD_CONFIDENCE_THRESHOLD", "0.45"))
+MODEL_PATH_WILDLIFE          = os.environ.get("MODEL_PATH_WILDLIFE", "")
+WILDLIFE_CONFIDENCE_THRESHOLD = float(os.environ.get("WILDLIFE_CONFIDENCE_THRESHOLD", "0.45"))
 
 # Where to write logs and saved frames
 LOG_DIR    = Path(os.environ.get("LOG_DIR", "logs"))
@@ -51,10 +56,17 @@ TRIGGER_CLASSES = {"squirrel"}
 # Classes we want logged but never triggered on
 BENIGN_CLASSES  = {"bird", "crow", "pigeon", "robin", "sparrow"}
 
+# Wildlife model classes that suppress a squirrel trigger
+WILDLIFE_SUPPRESS_CLASSES = {
+    "deer", "fawn", "buck", "doe",
+    "fox", "raccoon", "rabbit", "hog", "boar",
+    "bear", "coyote", "skunk", "opossum", "groundhog", "turkey",
+}
+
 # ─── LOGGING ──────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s  %(message)s",
     datefmt="%H:%M:%S",
 )
@@ -154,6 +166,15 @@ def main():
     bird_model = YOLO(MODEL_PATH_BIRD)
     log.info("Bird model loaded.")
 
+    wildlife_model = None
+    if MODEL_PATH_WILDLIFE:
+        if not Path(MODEL_PATH_WILDLIFE).exists():
+            log.warning(f"Wildlife model not found at '{MODEL_PATH_WILDLIFE}' — wildlife suppression disabled.")
+        else:
+            log.info(f"Loading wildlife model: {MODEL_PATH_WILDLIFE}")
+            wildlife_model = YOLO(MODEL_PATH_WILDLIFE)
+            log.info("Wildlife model loaded.")
+
     csv_fh, csv_writer = open_csv(LOG_DIR)
 
     log.info(f"Connecting to stream: {RTSP_URL}")
@@ -222,21 +243,34 @@ def main():
                 and bird_model.names[int(box.cls[0])].lower() == "bird"
             ]
 
-            # DEBUG: log all COCO detections to see what the model is finding
+            # DEBUG: log raw COCO bird detections to help tune BIRD_CONFIDENCE_THRESHOLD
             for box in bird_results.boxes:
-                name = bird_model.names[int(box.cls[0])].lower()
-                conf = float(box.conf[0])
-                if name == "bird":
-                    log.debug(f"[coco-raw] bird conf={conf:.3f} (threshold={BIRD_CONFIDENCE_THRESHOLD})")
+                if bird_model.names[int(box.cls[0])].lower() == "bird":
+                    log.debug(f"[coco-raw] bird conf={float(box.conf[0]):.3f} (threshold={BIRD_CONFIDENCE_THRESHOLD})")
 
-            if not squirrel_boxes and not bird_boxes:
+            wildlife_boxes = []
+            if wildlife_model:
+                wildlife_results = wildlife_model(frame, verbose=False)[0]
+                wildlife_boxes = [
+                    box for box in wildlife_results.boxes
+                    if float(box.conf[0]) >= WILDLIFE_CONFIDENCE_THRESHOLD
+                    and wildlife_model.names[int(box.cls[0])].lower() in WILDLIFE_SUPPRESS_CLASSES
+                ]
+
+            if not squirrel_boxes and not bird_boxes and not wildlife_boxes:
                 continue
 
-            frame_has_bird = len(bird_boxes) > 0
+            frame_has_bird     = len(bird_boxes) > 0
+            frame_has_wildlife = len(wildlife_boxes) > 0
             ts = datetime.datetime.now().isoformat(timespec="seconds")
 
             # Save one frame per inference pass; name by dominant class
-            prefix = "squirrel" if squirrel_boxes else "bird"
+            if squirrel_boxes:
+                prefix = "squirrel"
+            elif wildlife_boxes:
+                prefix = wildlife_model.names[int(wildlife_boxes[0].cls[0])].lower()
+            else:
+                prefix = "bird"
             frame_filename = f"{ts.replace(':', '-')}_{prefix}.jpg"
             frame_path = FRAMES_DIR / frame_filename
             cv2.imwrite(str(frame_path), frame)
@@ -244,7 +278,7 @@ def main():
             # ── Log squirrel detections ───────────────────────────────────────
             for box in squirrel_boxes:
                 conf = float(box.conf[0])
-                triggered = not frame_has_bird  # suppress if bird co-present
+                triggered = not frame_has_bird and not frame_has_wildlife
                 x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
                 w = x2 - x1
                 h = y2 - y1
@@ -261,6 +295,11 @@ def main():
 
                 if triggered:
                     log.info(f"🐿️  SQUIRREL          conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
+                elif frame_has_wildlife:
+                    wnames = ", ".join(
+                        wildlife_model.names[int(b.cls[0])].lower() for b in wildlife_boxes
+                    )
+                    log.info(f"🐿️  squirrel [suppressed — {wnames}]  conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
                 else:
                     log.info(f"🐿️  squirrel [suppressed — bird present]  conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
 
@@ -282,6 +321,26 @@ def main():
                 csv_fh.flush()
 
                 log.info(f"🐦  bird               conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
+
+            # ── Log wildlife detections ───────────────────────────────────────
+            for box in wildlife_boxes:
+                cls_name = wildlife_model.names[int(box.cls[0])].lower()
+                conf = float(box.conf[0])
+                x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                w = x2 - x1
+                h = y2 - y1
+
+                csv_writer.writerow({
+                    "timestamp":  ts,
+                    "class":      cls_name,
+                    "confidence": round(conf, 4),
+                    "triggered":  False,
+                    "x1": x1, "y1": y1, "w": w, "h": h,
+                    "frame_path": str(frame_path),
+                })
+                csv_fh.flush()
+
+                log.info(f"🦌  {cls_name:<18}  conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
 
     finally:
         cap.release()

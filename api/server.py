@@ -132,6 +132,7 @@ HTML = """<!DOCTYPE html>
     .ctrl-btn.active           { background: #2a2a2a; color: #eee;    border-color: #444; }
     .ctrl-btn.active.squirrel  { background: #451a03; color: #f59e0b; border-color: #7c3b0a; }
     .ctrl-btn.active.bird      { background: #0c1a40; color: #60a5fa; border-color: #1e3a8a; }
+    .ctrl-btn.active.wildlife  { background: #052e16; color: #4ade80; border-color: #166534; }
 
     /* ── Summary pills ──────────────────────────────────────────────────── */
     #summary {
@@ -139,8 +140,9 @@ HTML = """<!DOCTYPE html>
       font-size: 0.8rem;
     }
     .pill { background: #1e1e1e; border-radius: 20px; padding: 4px 12px; color: #aaa; }
-    .pill.squirrel { background: #451a03; color: #f59e0b; }
-    .pill.bird     { background: #0c1a40; color: #60a5fa; }
+    .pill.squirrel  { background: #451a03; color: #f59e0b; }
+    .pill.bird      { background: #0c1a40; color: #60a5fa; }
+    .pill.wildlife  { background: #052e16; color: #4ade80; }
 
     /* ── Cards grid ─────────────────────────────────────────────────────── */
     #cards {
@@ -156,6 +158,7 @@ HTML = """<!DOCTYPE html>
     }
     .card.squirrel { border-left-color: #f59e0b; }
     .card.bird     { border-left-color: #3b82f6; }
+    .card.wildlife { border-left-color: #22c55e; }
     .card.flagged  { opacity: 0.45; }
 
     .img-wrap { position: relative; cursor: zoom-in; }
@@ -175,6 +178,7 @@ HTML = """<!DOCTYPE html>
     .cls { font-size: 0.9rem; font-weight: 600; text-transform: capitalize; }
     .cls.squirrel { color: #f59e0b; }
     .cls.bird     { color: #60a5fa; }
+    .cls.wildlife { color: #4ade80; }
     .ts  { font-size: 0.7rem; color: #666; margin-top: 2px; }
     .right { display: flex; align-items: center; gap: 10px; }
     .conf { font-size: 1.2rem; font-weight: 700; }
@@ -237,6 +241,7 @@ HTML = """<!DOCTYPE html>
       <button class="ctrl-btn cls-btn active"          data-f="all"      onclick="setFilter('all')">All</button>
       <button class="ctrl-btn cls-btn squirrel"        data-f="squirrel" onclick="setFilter('squirrel')">Squirrel</button>
       <button class="ctrl-btn cls-btn bird"            data-f="bird"     onclick="setFilter('bird')">Bird</button>
+      <button class="ctrl-btn cls-btn wildlife"        data-f="wildlife" onclick="setFilter('wildlife')">Wildlife</button>
       <button class="ctrl-btn hc-btn"                  id="hc-btn"       onclick="toggleHighConf()">&#x2265;<span id="hc-label">70</span>%</button>
     </div>
   </div>
@@ -267,7 +272,12 @@ HTML = """<!DOCTYPE html>
     const flaggedSet = new Set();
     const detMap = {};
 
-    const BIRD_CLASSES = new Set(['bird','crow','pigeon','robin','sparrow']);
+    const BIRD_CLASSES     = new Set(['bird','crow','pigeon','robin','sparrow']);
+    const WILDLIFE_CLASSES = new Set([
+      'deer','fawn','buck','doe',
+      'fox','raccoon','rabbit','hog','boar',
+      'bear','coyote','skunk','opossum','groundhog','turkey',
+    ]);
 
     function windowMinutes() {
       if (currentWindow === 'today') {
@@ -299,10 +309,18 @@ HTML = """<!DOCTYPE html>
       render();
     }
 
+    function cardClass(cls) {
+      if (cls === 'squirrel') return 'squirrel';
+      if (BIRD_CLASSES.has(cls)) return 'bird';
+      if (WILDLIFE_CLASSES.has(cls)) return 'wildlife';
+      return '';
+    }
+
     function filtered() {
       let rows = allData;
       if (currentFilter === 'squirrel') rows = rows.filter(d => d.class === 'squirrel');
-      else if (currentFilter === 'bird') rows = rows.filter(d => BIRD_CLASSES.has(d.class));
+      else if (currentFilter === 'bird')     rows = rows.filter(d => BIRD_CLASSES.has(d.class));
+      else if (currentFilter === 'wildlife') rows = rows.filter(d => WILDLIFE_CLASSES.has(d.class));
       if (highConfOnly) rows = rows.filter(d => parseFloat(d.confidence) >= highConfThresh);
       return rows;
     }
@@ -407,12 +425,14 @@ HTML = """<!DOCTYPE html>
       const data = filtered();
       const squirrels = allData.filter(d => d.class === 'squirrel').length;
       const birds     = allData.filter(d => BIRD_CLASSES.has(d.class)).length;
-      const other     = allData.length - squirrels - birds;
+      const wildlife  = allData.filter(d => WILDLIFE_CLASSES.has(d.class)).length;
+      const other     = allData.length - squirrels - birds - wildlife;
 
       const summary = document.getElementById('summary');
       summary.innerHTML =
         (squirrels ? `<span class="pill squirrel">${squirrels} squirrel${squirrels !== 1 ? 's' : ''}</span>` : '') +
         (birds     ? `<span class="pill bird">${birds} bird${birds !== 1 ? 's' : ''}</span>` : '') +
+        (wildlife  ? `<span class="pill wildlife">${wildlife} wildlife</span>` : '') +
         (other     ? `<span class="pill">${other} other</span>` : '');
 
       const cards = document.getElementById('cards');
@@ -423,6 +443,7 @@ HTML = """<!DOCTYPE html>
 
       cards.innerHTML = data.map(d => {
         const cls      = (d.class || 'unknown').toLowerCase();
+        const cc       = cardClass(cls);
         const conf     = Math.round(parseFloat(d.confidence) * 100);
         const isFlagged = flaggedSet.has(d.timestamp);
         const imgHtml  = d.image_url ? `
@@ -430,15 +451,15 @@ HTML = """<!DOCTYPE html>
             <img src="${d.image_url}" alt="${cls}" loading="lazy"
                  data-x1="${d.x1 || 0}" data-y1="${d.y1 || 0}"
                  data-w="${d.w || 0}"   data-h="${d.h || 0}"
-                 data-cls="${cls}" onload="drawBox(this)">
+                 data-cls="${cc}" onload="drawBox(this)">
             <canvas class="bbox-canvas"></canvas>
           </div>` : '';
         return `
-          <div class="card ${cls}${isFlagged ? ' flagged' : ''}">
+          <div class="card ${cc}${isFlagged ? ' flagged' : ''}">
             ${imgHtml}
             <div class="card-body">
               <div>
-                <div class="cls ${cls}">${cls}</div>
+                <div class="cls ${cc}">${cls}</div>
                 <div class="ts">${ago(d.timestamp)} &middot; ${d.timestamp}</div>
               </div>
               <div class="right">

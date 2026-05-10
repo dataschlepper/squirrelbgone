@@ -39,7 +39,7 @@ load_dotenv()
 
 RTSP_URL                  = os.environ.get("RTSP_URL", "")
 MODEL_PATH                = os.environ.get("MODEL_PATH", "squirrel_detector.pt")
-MODEL_PATH_BIRD           = os.environ.get("MODEL_PATH_BIRD", "yolov8n.pt")
+MODEL_PATH_BIRD           = os.environ.get("MODEL_PATH_BIRD", "")
 TARGET_FPS                = int(os.environ.get("TARGET_FPS", "5"))
 CONFIDENCE_THRESHOLD         = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.45"))
 BIRD_CONFIDENCE_THRESHOLD    = float(os.environ.get("BIRD_CONFIDENCE_THRESHOLD", "0.45"))
@@ -162,9 +162,14 @@ def main():
     squirrel_model = YOLO(MODEL_PATH)
     log.info("Squirrel model loaded.")
 
-    log.info(f"Loading bird model: {MODEL_PATH_BIRD}")
-    bird_model = YOLO(MODEL_PATH_BIRD)
-    log.info("Bird model loaded.")
+    bird_model = None
+    if MODEL_PATH_BIRD:
+        if not Path(MODEL_PATH_BIRD).exists():
+            log.warning(f"Bird model not found at '{MODEL_PATH_BIRD}' — bird suppression disabled.")
+        else:
+            log.info(f"Loading bird model: {MODEL_PATH_BIRD}")
+            bird_model = YOLO(MODEL_PATH_BIRD)
+            log.info("Bird model loaded.")
 
     wildlife_model = None
     if MODEL_PATH_WILDLIFE:
@@ -228,7 +233,6 @@ def main():
 
             # ── Inference ────────────────────────────────────────────────────
             squirrel_results = squirrel_model(frame, verbose=False)[0]
-            bird_results     = bird_model(frame, verbose=False)[0]
 
             squirrel_boxes = [
                 box for box in squirrel_results.boxes
@@ -236,17 +240,18 @@ def main():
                 and squirrel_model.names[int(box.cls[0])].lower() == "squirrel"
             ]
 
-            # Filter COCO output to "bird" class only
-            bird_boxes = [
-                box for box in bird_results.boxes
-                if float(box.conf[0]) >= BIRD_CONFIDENCE_THRESHOLD
-                and bird_model.names[int(box.cls[0])].lower() == "bird"
-            ]
-
-            # DEBUG: log raw COCO bird detections to help tune BIRD_CONFIDENCE_THRESHOLD
-            for box in bird_results.boxes:
-                if bird_model.names[int(box.cls[0])].lower() == "bird":
-                    log.debug(f"[coco-raw] bird conf={float(box.conf[0]):.3f} (threshold={BIRD_CONFIDENCE_THRESHOLD})")
+            bird_boxes = []
+            if bird_model:
+                bird_results = bird_model(frame, verbose=False)[0]
+                bird_boxes = [
+                    box for box in bird_results.boxes
+                    if float(box.conf[0]) >= BIRD_CONFIDENCE_THRESHOLD
+                    and bird_model.names[int(box.cls[0])].lower() == "bird"
+                ]
+                # DEBUG: log raw COCO bird detections to help tune BIRD_CONFIDENCE_THRESHOLD
+                for box in bird_results.boxes:
+                    if bird_model.names[int(box.cls[0])].lower() == "bird":
+                        log.debug(f"[coco-raw] bird conf={float(box.conf[0]):.3f} (threshold={BIRD_CONFIDENCE_THRESHOLD})")
 
             wildlife_boxes = []
             if wildlife_model:

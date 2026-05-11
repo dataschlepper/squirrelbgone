@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SquirrelBGone — Project Plan</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #f5f5f4;
+      color: #1c1917;
+      min-height: 100vh;
+      padding: 2rem 1rem 4rem;
+    }
+
+    .page {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ── */
+    .header {
+      padding: 0 0 1.5rem;
+      border-bottom: 1px solid #e7e5e4;
+      margin-bottom: 1.5rem;
+    }
+    .header h1 {
+      font-size: 22px;
+      font-weight: 600;
+      color: #1c1917;
+      letter-spacing: -0.3px;
+    }
+    .header p {
+      font-size: 13px;
+      color: #78716c;
+      margin-top: 5px;
+    }
+
+    /* ── Stats ── */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 1.5rem;
+    }
+    .stat {
+      background: #ffffff;
+      border: 1px solid #e7e5e4;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .stat-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #a8a29e;
+      margin-bottom: 5px;
+    }
+    .stat-value {
+      font-size: 22px;
+      font-weight: 600;
+      color: #1c1917;
+    }
+    .stat-value.green { color: #16a34a; }
+
+    /* ── Phase cards ── */
+    .phase {
+      background: #ffffff;
+      border: 1px solid #e7e5e4;
+      border-radius: 12px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+
+    .phase-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .phase-header:hover { background: #fafaf9; }
+
+    .phase-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .phase-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: #1c1917;
+      flex: 1;
+    }
+
+    .phase-meta {
+      font-size: 12px;
+      color: #a8a29e;
+    }
+
+    .chevron {
+      font-size: 10px;
+      color: #a8a29e;
+      transition: transform 0.2s;
+      display: inline-block;
+    }
+    .chevron.open { transform: rotate(90deg); }
+
+    /* ── Progress bar ── */
+    .phase-progress-wrap { padding: 0 16px 0; }
+    .phase-progress {
+      height: 3px;
+      border-radius: 2px;
+      background: #f0eeec;
+    }
+    .phase-progress-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.3s;
+    }
+
+    /* ── Phase body ── */
+    .phase-body {
+      padding: 10px 16px 14px;
+      border-top: 1px solid #f0eeec;
+      margin-top: 12px;
+    }
+    .phase-body.collapsed { display: none; }
+
+    .phase-desc {
+      font-size: 12px;
+      color: #a8a29e;
+      margin-bottom: 10px;
+    }
+
+    /* ── Tasks ── */
+    .task {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid #f5f5f4;
+    }
+    .task:last-child { border-bottom: none; }
+
+    .task-check {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      border: 1.5px solid #d6d3d1;
+      cursor: pointer;
+      flex-shrink: 0;
+      margin-top: 1px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+      background: #fff;
+    }
+    .task-check:hover { border-color: #a8a29e; }
+    .task-check.done {
+      border-color: #16a34a;
+      background: #16a34a;
+    }
+    .task-check.done::after {
+      content: '';
+      display: block;
+      width: 4px;
+      height: 7px;
+      border: 2px solid #fff;
+      border-top: none;
+      border-left: none;
+      transform: rotate(45deg) translateY(-1px);
+    }
+
+    .task-text {
+      font-size: 13px;
+      color: #1c1917;
+      line-height: 1.5;
+    }
+    .task-text.done {
+      color: #c4b5b0;
+      text-decoration: line-through;
+    }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 1px 7px;
+      border-radius: 10px;
+      margin-left: 6px;
+      font-weight: 400;
+      vertical-align: middle;
+    }
+    .badge-sw { background: #eff6ff; color: #1d4ed8; }
+    .badge-hw { background: #fff7ed; color: #c2410c; }
+    .badge-ai { background: #f5f3ff; color: #6d28d9; }
+
+    /* ── Footer ── */
+    .budget {
+      font-size: 12px;
+      color: #a8a29e;
+      margin-top: 1rem;
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+    .budget span { font-weight: 500; color: #57534e; }
+
+    /* ── Responsive ── */
+    @media (max-width: 500px) {
+      .stats { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <h1>SquirrelBGone — project plan</h1>
+    <p>Real-time CV squirrel deterrent · Raspberry Pi 5 + YOLOv8 + solenoid valve</p>
+  </div>
+
+  <div class="stats" id="stats">
+    <div class="stat">
+      <div class="stat-label">Total tasks</div>
+      <div class="stat-value" id="s-total">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Completed</div>
+      <div class="stat-value green" id="s-done">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Phases</div>
+      <div class="stat-value">4</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Est. budget</div>
+      <div class="stat-value" style="font-size:16px;padding-top:3px">~$455</div>
+    </div>
+  </div>
+
+  <div id="phases"></div>
+
+  <div class="budget">
+    Budget breakdown:
+    Hardware <span>~$275–330</span> ·
+    Tools <span>~$130–155</span> ·
+    Consumables <span>~$20–30</span>
+  </div>
+
+</div>
+
+<script>
+const phases = [
+  {
+    id: 'p1', label: 'Phase 1 — Detection only', color: '#2563eb',
+    desc: 'Software setup · no hardware yet',
+    tasks: [
+      { id: 't1', text: 'Flash Raspberry Pi OS, install Python deps, configure SSH', tag: 'sw' },
+      { id: 't2', text: 'Mount camera, confirm RTSP stream accessible on local network', tag: 'hw' },
+      { id: 't3', text: 'Pull squirrel/bird YOLOv8 model from Roboflow Universe via Inference SDK', tag: 'sw' },
+      { id: 't4', text: 'Run inference loop on live stream, print detections + confidence', tag: 'sw' },
+      { id: 't5', text: 'Log detections to CSV with timestamp, class, confidence, saved frame path', tag: 'sw' },
+      { id: 't6', text: 'Review logs, tune confidence threshold until false positive rate is acceptable', tag: 'sw' },
+    ]
+  },
+  {
+    id: 'p2', label: 'Phase 2 — GPIO dry run', color: '#d97706',
+    desc: 'LED stand-in · no water yet',
+    tasks: [
+      { id: 't7', text: 'Wire LED to GPIO pin on breadboard with current-limiting resistor', tag: 'hw' },
+      { id: 't8', text: 'Wire detection → GPIO trigger logic using gpiozero', tag: 'sw' },
+      { id: 't9', text: 'Implement cooldown timer (prevent re-trigger every frame)', tag: 'sw' },
+      { id: 't10', text: 'Implement day/night schedule guard (no triggers at night)', tag: 'sw' },
+      { id: 't11', text: 'Confirm LED flashes correctly on squirrel detection, stays off for birds', tag: 'hw' },
+    ]
+  },
+  {
+    id: 'p3', label: 'Phase 3 — Hardware integration', color: '#16a34a',
+    desc: 'Relay + solenoid + water',
+    tasks: [
+      { id: 't12', text: 'Wire relay module: separate 5V supply, shared ground with Pi, GPIO signal line', tag: 'hw' },
+      { id: 't13', text: 'Wire NC solenoid to relay NO/COM terminals and 12V supply', tag: 'hw' },
+      { id: 't14', text: 'Connect solenoid to hose line with Teflon-taped fittings + misting nozzle', tag: 'hw' },
+      { id: 't15', text: 'Test water flow: confirm valve opens/closes on trigger signal', tag: 'hw' },
+      { id: 't16', text: 'Set spray duration to 1–1.5 sec, confidence threshold to 0.7+', tag: 'sw' },
+      { id: 't17', text: 'Log all triggers with saved frames for first-week review', tag: 'sw' },
+      { id: 't18', text: 'Mount Pi + relay in weatherproof IP65 enclosure with cable glands', tag: 'hw' },
+    ]
+  },
+  {
+    id: 'p4', label: 'Phase 4 — Polish', color: '#7c3aed',
+    desc: 'Dashboard · AI review · per-class logic',
+    tasks: [
+      { id: 't19', text: 'Build FastAPI backend: live feed endpoint, detection log, spray history', tag: 'sw' },
+      { id: 't20', text: 'Build simple frontend dashboard with bounding box overlay on live feed', tag: 'sw' },
+      { id: 't21', text: 'Nightly batch script: send flagged frames to Claude for classification', tag: 'ai' },
+      { id: 't22', text: 'Parse vision API results into correction log, use to tune thresholds', tag: 'ai' },
+      { id: 't23', text: 'Per-class trigger logic: spray squirrels, suppress birds/shadows/other', tag: 'sw' },
+      { id: 't24', text: 'Harden day/night schedule, add config file for all tunable params', tag: 'sw' },
+    ]
+  }
+];
+
+const STORAGE_KEY = 'sbg-done-v1';
+const done = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'));
+
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify([...done])); } catch(e) {}
+}
+
+function updateStats() {
+  const total = phases.reduce((a, p) => a + p.tasks.length, 0);
+  document.getElementById('s-total').textContent = total;
+  document.getElementById('s-done').textContent = done.size;
+}
+
+function updatePhaseProgress(pid) {
+  const phase = phases.find(p => p.id === pid);
+  const completed = phase.tasks.filter(t => done.has(t.id)).length;
+  const pct = phase.tasks.length ? (completed / phase.tasks.length * 100) : 0;
+  const fill = document.getElementById('fill-' + pid);
+  if (fill) fill.style.width = pct + '%';
+  const meta = document.getElementById('meta-' + pid);
+  if (meta) meta.textContent = completed + '/' + phase.tasks.length;
+}
+
+function toggle(tid, checkEl) {
+  if (done.has(tid)) { done.delete(tid); checkEl.classList.remove('done'); }
+  else { done.add(tid); checkEl.classList.add('done'); }
+  const textEl = checkEl.nextElementSibling;
+  textEl.classList.toggle('done', done.has(tid));
+  const pid = checkEl.closest('.phase').dataset.pid;
+  updatePhaseProgress(pid);
+  updateStats();
+  save();
+}
+
+function tagBadge(tag) {
+  if (tag === 'sw') return '<span class="badge badge-sw">software</span>';
+  if (tag === 'hw') return '<span class="badge badge-hw">hardware</span>';
+  if (tag === 'ai') return '<span class="badge badge-ai">AI</span>';
+  return '';
+}
+
+const container = document.getElementById('phases');
+
+phases.forEach((phase, i) => {
+  const div = document.createElement('div');
+  div.className = 'phase';
+  div.dataset.pid = phase.id;
+
+  const completed = phase.tasks.filter(t => done.has(t.id)).length;
+  const pct = phase.tasks.length ? (completed / phase.tasks.length * 100) : 0;
+  const open = i === 0;
+
+  div.innerHTML = `
+    <div class="phase-header" onclick="togglePhase('${phase.id}')">
+      <div class="phase-dot" style="background:${phase.color}"></div>
+      <span class="phase-title">${phase.label}</span>
+      <span class="phase-meta" id="meta-${phase.id}">${completed}/${phase.tasks.length}</span>
+      <span class="chevron ${open ? 'open' : ''}" id="chev-${phase.id}">▶</span>
+    </div>
+    <div class="phase-progress-wrap">
+      <div class="phase-progress">
+        <div class="phase-progress-fill" id="fill-${phase.id}" style="width:${pct}%;background:${phase.color}"></div>
+      </div>
+    </div>
+    <div class="phase-body ${open ? '' : 'collapsed'}" id="body-${phase.id}">
+      <p class="phase-desc">${phase.desc}</p>
+      ${phase.tasks.map(t => `
+        <div class="task">
+          <div class="task-check ${done.has(t.id) ? 'done' : ''}" onclick="toggle('${t.id}', this)"></div>
+          <span class="task-text ${done.has(t.id) ? 'done' : ''}">${t.text}${tagBadge(t.tag)}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  container.appendChild(div);
+});
+
+function togglePhase(pid) {
+  const body = document.getElementById('body-' + pid);
+  const chev = document.getElementById('chev-' + pid);
+  body.classList.toggle('collapsed');
+  chev.classList.toggle('open');
+}
+
+updateStats();
+</script>
+</body>
+</html>

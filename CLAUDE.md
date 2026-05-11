@@ -6,7 +6,7 @@ Project context for Claude Code. Read this first. Full detail in `docs/`.
 
 ## What this is
 
-**SquirrelBGone** — a Raspberry Pi 5 pulls an RTSP stream from an outdoor PoE camera, runs YOLOv8 inference via the Roboflow Inference SDK, and triggers a 12V normally-closed solenoid valve (via a GPIO-controlled relay) to spray water when a squirrel is detected. Birds and other classes are suppressed. Everything is logged with saved frames.
+**SquirrelBGone** — a Raspberry Pi 5 pulls an RTSP stream from an outdoor PoE camera, runs YOLOv8 inference locally via **ultralytics**, and triggers a 12V normally-closed solenoid valve (via a GPIO-controlled relay) to spray water when a squirrel is detected. Suppression models (bird, wildlife) can be layered on to prevent false triggers. Everything is logged with saved frames.
 
 ---
 
@@ -46,23 +46,26 @@ RTSP stream
 Frame capture (OpenCV)
     │
     ▼
-YOLOv8 inference (Roboflow Inference SDK)
+YOLOv8 inference — up to 3 models per frame:
+  ├── Squirrel model (ultralytics, required)
+  ├── Bird suppression model (ultralytics, optional)
+  └── Wildlife suppression model (ultralytics, optional — backlog)
     │
     ▼
-Filter: class == "squirrel" AND confidence >= threshold?
+Any squirrel detections above threshold?
     │
-    ├── No ──► log detection, continue
+    ├── No ──► if bird/wildlife detected, log those; skip frame
     │
-    └── Yes ──► cooldown clear? ──► No: skip
+    └── Yes ──► bird or wildlife also in frame?
                     │
-                    └── Yes ──► daytime? ──► No: skip
-                                    │
-                                    └── Yes ──► GPIO pulse (relay → solenoid)
-                                                    │
-                                                save frame + write trigger log
+                    ├── Yes ──► log squirrel as suppressed (triggered=False)
+                    │
+                    └── No ──► log squirrel (triggered=True)
+                               save frame
+                               [Phase 2+: GPIO pulse → relay → solenoid]
 ```
 
-Full module breakdown + code sketches: `docs/software.md`
+Full details: `docs/software.md`
 
 ---
 
@@ -72,23 +75,15 @@ Full module breakdown + code sketches: `docs/software.md`
 squirrelbgone/
 ├── CLAUDE.md                # ← you are here
 ├── README.md
-├── config.yaml              # gitignored — copy from config.example.yaml
-├── config.example.yaml      # all tunable params with comments
-├── main.py                  # entry point
-├── config.py                # loads + validates config.yaml
-├── inference/
-│   ├── stream.py            # RTSP capture via OpenCV
-│   └── detector.py          # Roboflow Inference SDK wrapper
-├── trigger/
-│   ├── cooldown.py          # cooldown timer
-│   ├── schedule.py          # day/night guard
-│   └── gpio_relay.py        # gpiozero relay pulse
-├── logging/
-│   ├── detection_log.py     # writes detections.csv
-│   └── trigger_log.py       # writes triggers.csv + saves frames
-├── scripts/
-│   └── nightly_review.py    # Phase 4: AI batch frame review (cron)
-├── api/                     # Phase 4: FastAPI backend
+├── detect.py                # main entry point — inference loop, CSV logging
+├── .env                     # gitignored — copy from .env.example
+├── .env.example             # all config vars with comments
+├── models/
+│   └── squirrelbgone_best.pt  # squirrel detector weights
+├── api/
+│   └── server.py            # FastAPI read-only dashboard (live)
+├── logs/                    # daily CSVs: detections_YYYY-MM-DD.csv
+├── frames/                  # saved JPEG frames for each detection
 └── docs/
     ├── hardware.md
     ├── network.md
@@ -120,50 +115,49 @@ squirrelbgone/
 
 ## Config keys (quick ref)
 
-```yaml
-camera.rtsp_url                  # RTSP stream URL
-inference.roboflow_api_key        # Roboflow API key
-inference.roboflow_model_id       # e.g. "squirrels-birds/1"
-inference.confidence_threshold    # min confidence to trigger (start ~0.70)
-inference.review_threshold        # below this → flagged for AI review (0.85)
-classes.trigger                   # ["squirrel"]
-classes.suppress                  # ["bird", "shadow"]
-gpio.pin                          # BCM pin number
-gpio.active_high                  # false (JBtek relay is active-low)
-spray.duration_sec                # 1.5 recommended
-spray.cooldown_sec                # 30 recommended
-schedule.day_start                # [7, 0]
-schedule.day_end                  # [20, 0]
-logging.detection_log             # "logs/detections.csv"
-logging.trigger_log               # "logs/triggers.csv"
-logging.frame_dir                 # "frames/"
+All config is via `.env` (copy `.env.example`):
+
+```
+RTSP_URL                     # RTSP stream URL
+MODEL_PATH                   # path to squirrel .pt weights (required)
+CONFIDENCE_THRESHOLD         # squirrel min confidence, default 0.45
+MODEL_PATH_BIRD              # bird suppression model (optional, leave empty to disable)
+BIRD_CONFIDENCE_THRESHOLD    # default 0.45
+MODEL_PATH_WILDLIFE          # wildlife suppression model (optional — backlog)
+WILDLIFE_CONFIDENCE_THRESHOLD  # default 0.45
+TARGET_FPS                   # frames to process per second, default 5
+LOG_DIR                      # default "logs"
+FRAMES_DIR                   # default "frames"
+ROBOFLOW_API_KEY             # needed only to download models from Roboflow Universe
 ```
 
-Full config with comments: `config.example.yaml`
+Full config with comments: `.env.example`
 
 ---
 
 ## Log schemas
 
-**`logs/detections_YYYY-MM-DD.csv`** — every inference result (one file per day, rolls over at midnight):
-`timestamp, class, confidence, triggered, frame_path, bbox_x, bbox_y, bbox_w, bbox_h`
+**`logs/detections_YYYY-MM-DD.csv`** — every detection (squirrel, bird, wildlife), one file per day, rolls over at midnight:
+`timestamp, class, confidence, triggered, x1, y1, w, h, frame_path`
 
-**`logs/triggers.csv`** — spray events only:
-`timestamp, class, confidence, spray_duration_sec, frame_path`
+- `triggered=True` means the squirrel detection was not suppressed (Phase 2+: this fires the relay)
+- `triggered=False` for all bird/wildlife rows, and for squirrels suppressed by a co-present bird/wildlife
+
+**`logs/corrections.csv`** — user-flagged false positives from the dashboard:
+`flagged_at, detection_timestamp, class, confidence, frame_path`
 
 ---
 
 ## Dependencies
 
 ```
-inference-sdk              # Roboflow Inference SDK
-opencv-python-headless     # RTSP capture, frame saving
-gpiozero                   # GPIO relay control
-RPi.GPIO                   # gpiozero backend on Pi
-fastapi                    # Phase 4 API
-uvicorn                    # Phase 4 ASGI server
-pyyaml                     # config loading
-requests                   # nightly AI batch (vision API calls)
+ultralytics          # YOLOv8 inference (squirrel + optional suppression models)
+opencv-python        # RTSP capture, frame saving
+python-dotenv        # .env config loading
+fastapi              # dashboard API (live)
+uvicorn              # ASGI server (live)
+gpiozero             # GPIO relay control (Phase 2+)
+RPi.GPIO             # gpiozero backend on Pi (Phase 2+)
 ```
 
 ---

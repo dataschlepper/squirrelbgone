@@ -5,37 +5,39 @@ Real-time computer vision squirrel deterrent. A Raspberry Pi 5 pulls an RTSP str
 ## How it works
 
 1. Reolink RLC-811A camera streams RTSP video over the local network
-2. Raspberry Pi 5 pulls the stream and runs YOLOv8 inference via the Roboflow Inference SDK
-3. On a squirrel detection above the confidence threshold, a GPIO pin fires a relay
-4. The relay opens a normally-closed 12V solenoid valve, triggering a water misting nozzle
-5. A cooldown timer and day/night schedule guard prevent spurious triggers
-6. All detections and spray events are logged with saved frames for review
+2. Raspberry Pi 5 pulls the stream and runs YOLOv8 inference locally via ultralytics
+3. Squirrel detections above the confidence threshold are logged with saved frames
+4. Optional suppression models (bird, wildlife) prevent false triggers from non-targets
+5. A FastAPI dashboard on the Pi lets you review detections and flag false positives from your phone
+6. Phase 2+: a GPIO pin fires a relay → opens a 12V solenoid valve → water spray
 
 ## Software stack
 
 | Component | Role |
 |---|---|
 | Raspberry Pi OS | Host OS |
-| Python | Application runtime |
-| Roboflow Inference SDK | YOLOv8 model serving (squirrel/bird model from Roboflow Universe) |
-| gpiozero | GPIO relay control |
-| FastAPI | Backend API — live feed, detection log, spray history (Phase 4) |
-| Claude / GPT-4V | Nightly batch frame review for threshold tuning (Phase 4) |
+| Python + ultralytics | YOLOv8 inference (squirrel model + optional suppression models) |
+| OpenCV | RTSP stream capture, frame saving |
+| FastAPI + uvicorn | Read-only detection dashboard (live) |
+| gpiozero | GPIO relay control (Phase 2+) |
 
 ## Project structure
 
 ```
 squirrelbgone/
-├── README.md
-├── docs/
-│   ├── hardware.md        # Wiring, components, key design decisions
-│   ├── network.md         # Topology, RTSP setup, PoE notes
-│   ├── phases.md          # 4-phase build plan with task breakdown
-│   └── shopping-list.md   # Parts list with prices and links
-├── inference/             # YOLOv8 inference loop, logging
-├── gpio/                  # Relay control, cooldown, schedule guard
-├── api/                   # FastAPI backend (Phase 4)
-└── dashboard/             # Frontend with bounding box overlay (Phase 4)
+├── detect.py            # Inference loop, CSV logging
+├── .env.example         # Config template (copy to .env)
+├── models/              # YOLOv8 .pt weight files
+├── api/
+│   └── server.py        # FastAPI dashboard
+├── logs/                # Daily detection CSVs
+├── frames/              # Saved JPEG frames
+└── docs/
+    ├── hardware.md       # Wiring, components, key design decisions
+    ├── network.md        # Topology, RTSP setup, PoE notes
+    ├── phases.md         # 4-phase build plan with task breakdown
+    ├── software.md       # Architecture, schemas, API endpoints
+    └── shopping-list.md  # Parts list with prices and links
 ```
 
 ## Build phases

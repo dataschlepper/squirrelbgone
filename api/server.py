@@ -32,8 +32,8 @@ CORRECTION_FIELDS  = ["flagged_at", "detection_timestamp", "class", "confidence"
 
 app = FastAPI()
 
-if FRAMES_DIR.exists():
-    app.mount("/frames", StaticFiles(directory=str(FRAMES_DIR)), name="frames")
+FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/frames", StaticFiles(directory=str(FRAMES_DIR)), name="frames")
 
 
 def _read_recent(minutes: int) -> list[dict]:

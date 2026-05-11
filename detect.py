@@ -278,7 +278,9 @@ def main():
                 prefix = "bird"
             frame_filename = f"{ts.replace(':', '-')}_{prefix}.jpg"
             frame_path = FRAMES_DIR / frame_filename
-            cv2.imwrite(str(frame_path), frame)
+            if not cv2.imwrite(str(frame_path), frame):
+                log.warning(f"Failed to write frame: {frame_path}")
+                frame_path = Path("")
 
             # ── Log squirrel detections ───────────────────────────────────────
             for box in squirrel_boxes:

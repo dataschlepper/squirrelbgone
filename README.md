@@ -2,6 +2,17 @@
 
 Real-time computer vision squirrel deterrent. A Raspberry Pi 5 pulls an RTSP stream from an outdoor PoE camera, runs YOLOv8 inference, and triggers a 12V solenoid valve to spray water when a squirrel is detected. Birds and other classes are suppressed.
 
+## Build phases
+
+| Phase | Description | Status |
+|---|---|---|
+| 1 | Detection only — software setup, RTSP stream, inference loop, CSV logging | ✅ |
+| 2 | GPIO dry run — LED stand-in, cooldown timer, day/night guard | 🔄 In progress |
+| 3 | Hardware integration — relay, solenoid, water, weatherproof enclosure | — |
+| 4 | Polish — FastAPI dashboard, AI-assisted threshold tuning, per-class logic | — |
+
+See [`docs/phases.md`](docs/phases.md) for the full task breakdown.
+
 ## How it works
 
 1. Reolink RLC-811A camera streams RTSP video over the local network
@@ -39,17 +50,6 @@ squirrelbgone/
     ├── software.md       # Architecture, schemas, API endpoints
     └── shopping-list.md  # Parts list with prices and links
 ```
-
-## Build phases
-
-| Phase | Description | Status |
-|---|---|---|
-| 1 | Detection only — software setup, RTSP stream, inference loop, CSV logging | — |
-| 2 | GPIO dry run — LED stand-in, cooldown timer, day/night guard | — |
-| 3 | Hardware integration — relay, solenoid, water, weatherproof enclosure | — |
-| 4 | Polish — FastAPI dashboard, AI-assisted threshold tuning, per-class logic | — |
-
-See [`docs/phases.md`](docs/phases.md) for the full task breakdown.
 
 ## Budget
 

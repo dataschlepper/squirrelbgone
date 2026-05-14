@@ -209,13 +209,16 @@ def main():
         while _running:
             now = time.monotonic()
 
-            ret, frame = cap.read()
-            if not ret:
-                cap.release()
+            if cap is None:
                 cap, reconnect_attempt = _reconnect(RTSP_URL, reconnect_attempt)
                 if cap is None:
                     continue
                 last_frame_time = 0.0
+
+            ret, frame = cap.read()
+            if not ret:
+                cap.release()
+                cap = None
                 continue
 
             reconnect_attempt = 0
@@ -350,7 +353,8 @@ def main():
                 log.info(f"🦌  {cls_name:<18}  conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
 
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
         csv_fh.close()
         log.info("Done.")
 

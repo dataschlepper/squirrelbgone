@@ -50,6 +50,13 @@ WILDLIFE_CONFIDENCE_THRESHOLD = float(os.environ.get("WILDLIFE_CONFIDENCE_THRESH
 LOG_DIR    = Path(os.environ.get("LOG_DIR", "logs"))
 FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", "frames"))
 
+# Phase 2+: GPIO trigger
+GPIO_PIN           = int(os.environ.get("GPIO_PIN", "18"))
+COOLDOWN_SEC       = float(os.environ.get("COOLDOWN_SEC", "10"))
+DAY_START          = int(os.environ.get("DAY_START", "7"))   # hour 0–23, inclusive
+DAY_END            = int(os.environ.get("DAY_END", "20"))    # hour 0–23, exclusive
+SPRAY_DURATION_SEC = float(os.environ.get("SPRAY_DURATION_SEC", "1.0"))
+
 # Classes that should trigger the sprayer (Phase 2+)
 TRIGGER_CLASSES = {"squirrel"}
 
@@ -71,6 +78,31 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("sbg")
+
+# ─── GPIO ─────────────────────────────────────────────────────────────────────
+
+_gpio_output = None
+
+def _setup_gpio():
+    global _gpio_output
+    try:
+        from gpiozero import LED
+        # Phase 3: swap LED for OutputDevice(GPIO_PIN, active_high=False) for the relay
+        _gpio_output = LED(GPIO_PIN)
+        log.info(f"GPIO ready: LED on pin {GPIO_PIN}")
+    except Exception as exc:
+        log.warning(f"GPIO unavailable ({exc}) — running without hardware output")
+
+def _fire_gpio():
+    if _gpio_output is None:
+        return
+    _gpio_output.blink(on_time=SPRAY_DURATION_SEC, off_time=0, n=1, background=True)
+
+def _cleanup_gpio():
+    global _gpio_output
+    if _gpio_output is not None:
+        _gpio_output.close()
+        _gpio_output = None
 
 # ─── SHUTDOWN ─────────────────────────────────────────────────────────────────
 
@@ -182,6 +214,8 @@ def main():
 
     csv_fh, csv_writer = open_csv(LOG_DIR)
 
+    _setup_gpio()
+
     log.info(f"Connecting to stream: {RTSP_URL}")
     cap = _open_stream(RTSP_URL)
     if cap is None:
@@ -202,6 +236,7 @@ def main():
 
     frame_interval    = 1.0 / TARGET_FPS
     last_frame_time   = 0.0
+    last_trigger_time = 0.0
     current_date      = datetime.date.today()
     reconnect_attempt = 0
 
@@ -288,10 +323,33 @@ def main():
             # ── Log squirrel detections ───────────────────────────────────────
             for box in squirrel_boxes:
                 conf = float(box.conf[0])
-                triggered = not frame_has_bird and not frame_has_wildlife
                 x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
                 w = x2 - x1
                 h = y2 - y1
+
+                triggered = not frame_has_bird and not frame_has_wildlife
+                suppress_reason = ""
+
+                if not triggered:
+                    if frame_has_wildlife:
+                        suppress_reason = ", ".join(
+                            wildlife_model.names[int(b.cls[0])].lower() for b in wildlife_boxes
+                        )
+                    else:
+                        suppress_reason = "bird present"
+                else:
+                    now_mono = time.monotonic()
+                    if not (DAY_START <= datetime.datetime.now().hour < DAY_END):
+                        triggered = False
+                        suppress_reason = "nighttime"
+                    elif (now_mono - last_trigger_time) < COOLDOWN_SEC:
+                        triggered = False
+                        remaining = COOLDOWN_SEC - (now_mono - last_trigger_time)
+                        suppress_reason = f"cooldown {remaining:.0f}s"
+
+                if triggered:
+                    last_trigger_time = time.monotonic()
+                    _fire_gpio()
 
                 csv_writer.writerow({
                     "timestamp":  ts,
@@ -305,13 +363,8 @@ def main():
 
                 if triggered:
                     log.info(f"🐿️  SQUIRREL          conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
-                elif frame_has_wildlife:
-                    wnames = ", ".join(
-                        wildlife_model.names[int(b.cls[0])].lower() for b in wildlife_boxes
-                    )
-                    log.info(f"🐿️  squirrel [suppressed — {wnames}]  conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
                 else:
-                    log.info(f"🐿️  squirrel [suppressed — bird present]  conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
+                    log.info(f"🐿️  squirrel [suppressed — {suppress_reason}]  conf={conf:.2f}  bbox=({x1},{y1},{w}×{h})")
 
             # ── Log bird detections ───────────────────────────────────────────
             for box in bird_boxes:
@@ -356,6 +409,7 @@ def main():
         if cap is not None:
             cap.release()
         csv_fh.close()
+        _cleanup_gpio()
         log.info("Done.")
 
 

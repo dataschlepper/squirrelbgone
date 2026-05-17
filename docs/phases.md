@@ -25,13 +25,13 @@ The project is structured into four incremental phases. Each phase is fully test
 
 **Goal:** Validate the full detection → trigger pipeline using an LED as a stand-in for the solenoid. No water involved.
 
-| Task | Type |
-|---|---|
-| Wire LED to GPIO pin on breadboard with current-limiting resistor | hardware |
-| Wire detection → GPIO trigger logic using gpiozero | software |
-| Implement cooldown timer (prevent re-trigger every frame) | software |
-| Implement day/night schedule guard (no triggers at night) | software |
-| Confirm LED flashes correctly on squirrel detection, stays off for birds | hardware |
+| Task | Type | Status |
+|---|---|---|
+| Wire LED to GPIO pin on breadboard with current-limiting resistor | hardware | in progress |
+| Wire detection → GPIO trigger logic using gpiozero | software | done |
+| Implement cooldown timer (prevent re-trigger every frame) | software | done |
+| Implement day/night schedule guard (no triggers at night) | software | done |
+| Confirm LED flashes correctly on squirrel detection, stays off for birds | hardware | — |
 
 **Exit criteria:** LED fires cleanly and only when expected. Cooldown and schedule guard both confirmed working.
 

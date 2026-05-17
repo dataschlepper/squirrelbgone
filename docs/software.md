@@ -27,8 +27,14 @@ The core pipeline is a continuous loop: pull frames from RTSP → run YOLOv8 inf
 │      └── Yes ──► bird OR wildlife also in frame?               │
 │                      │                                          │
 │                      ├── Yes ──► triggered=False (suppressed)  │
-│                      └── No  ──► triggered=True                │
-│                                  [Phase 2+: GPIO relay pulse]  │
+│                      └── No  ──► within DAY_START–DAY_END?     │
+│                                      │                          │
+│                                      ├── No  ──► triggered=False (nighttime)
+│                                      └── Yes ──► cooldown elapsed?          │
+│                                                      │          │
+│                                                      ├── No  ──► triggered=False (cooldown)
+│                                                      └── Yes ──► triggered=True
+│                                                                  GPIO pulse  │
 │                                                                 │
 │  Save frame + write CSV row for every detection                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -78,6 +84,11 @@ python detect.py
 | `TARGET_FPS` | `5` | Frames processed per second |
 | `LOG_DIR` | `logs` | |
 | `FRAMES_DIR` | `frames` | |
+| `GPIO_PIN` | `18` | BCM pin; physical pin 12 on Pi 5 |
+| `COOLDOWN_SEC` | `10` | Minimum seconds between trigger events |
+| `DAY_START` | `7` | Start hour (0–23, inclusive) |
+| `DAY_END` | `20` | End hour (0–23, exclusive) |
+| `SPRAY_DURATION_SEC` | `1.0` | GPIO pulse duration in seconds |
 
 **Suppression logic:** If a bird or wildlife detection co-occurs in the same frame as a squirrel, the squirrel row is written with `triggered=False`. The squirrel trigger is suppressed regardless of confidence. Bird and wildlife detections are always written with `triggered=False`.
 
@@ -159,23 +170,26 @@ uvicorn api.server:app --host 0.0.0.0 --port 8000
 
 ---
 
-## Phase 2+ — GPIO (not yet implemented)
+## GPIO trigger (Phase 2+)
 
-When a squirrel detection has `triggered=True`, Phase 2 will add:
+**Phase 2 (current):** `gpiozero.LED(GPIO_PIN)` drives the dry-run LED on BCM pin 18 (physical pin 12).  
+**Phase 3:** Swap to `OutputDevice(GPIO_PIN, active_high=False)` for the JBtek relay (active-low).
 
-```python
-from gpiozero import OutputDevice
-relay = OutputDevice(GPIO_PIN, active_high=False)  # JBtek is active-low
+### Guard chain
 
-def spray(duration_sec: float):
-    relay.on()
-    time.sleep(duration_sec)
-    relay.off()
-```
+Every potential trigger passes three guards in order before `_fire_gpio()` is called:
 
-Guards needed before `spray()`:
-1. **Cooldown timer** — prevent re-trigger on every frame during one event (30s recommended)
-2. **Day/night guard** — no triggers outside configured hours
+1. **Suppression** — bird or wildlife detected in the same frame → `triggered=False`
+2. **Day/night guard** — `datetime.now().hour` outside `[DAY_START, DAY_END)` → `triggered=False`, logs `suppressed — nighttime`
+3. **Cooldown** — fewer than `COOLDOWN_SEC` seconds since last trigger → `triggered=False`, logs `suppressed — cooldown Ns`
+
+If all three pass, `last_trigger_time` is updated and `_fire_gpio()` calls `blink(on_time=SPRAY_DURATION_SEC, n=1, background=True)` — non-blocking.
+
+The `triggered` column in the CSV reflects the final outcome after all guards.
+
+### Graceful degradation
+
+`gpiozero` is imported lazily inside `_setup_gpio()`. If the import fails (e.g. running on a dev Mac), the script logs a warning and continues without hardware output. Inference, cooldown tracking, and CSV logging all run normally.
 
 ---
 

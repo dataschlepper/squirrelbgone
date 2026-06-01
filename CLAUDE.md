@@ -15,11 +15,11 @@ Project context for Claude Code. Read this first. Full detail in `docs/`.
 > **Update this section as phases are completed.**
 
 - [x] Phase 1 — Detection only (software setup, RTSP stream, inference loop, CSV logging)
-- [ ] Phase 2 — GPIO dry run (LED stand-in, cooldown timer, day/night guard)
+- [x] Phase 2 — GPIO dry run (LED stand-in, cooldown timer, day/night guard)
 - [ ] Phase 3 — Hardware integration (relay, solenoid, water, outdoor enclosure)
 - [ ] Phase 4 — Polish (FastAPI dashboard, nightly AI review, per-class logic, config hardening)
 
-**Currently working on:** Phase 2
+**Currently working on:** Phase 3
 
 ---
 

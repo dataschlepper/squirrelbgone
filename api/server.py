@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """
 SquirrelBGone — api/server.py
-Read-only mobile dashboard for reviewing recent detections.
+Dashboard for reviewing detections and testing hardware.
 
 Usage (from repo root):
     uvicorn api.server:app --host 0.0.0.0 --port 8000
+
+Note: the /api/spray endpoint requires detect.py to be stopped first
+(both processes cannot hold the same GPIO pin simultaneously).
 """
 
 import csv
 import datetime
 import os
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,6 +26,7 @@ load_dotenv()
 
 LOG_DIR    = Path(os.environ.get("LOG_DIR",    "logs"))
 FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", "frames"))
+GPIO_PIN   = int(os.environ.get("GPIO_PIN", "18"))
 
 # Minimum confidence logged by detect.py
 LOG_THRESHOLD  = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.45"))
@@ -30,7 +36,24 @@ HIGH_CONF_THRESHOLD = float(os.environ.get("HIGH_CONF_THRESHOLD", "0.70"))
 CORRECTIONS_PATH   = LOG_DIR / "corrections.csv"
 CORRECTION_FIELDS  = ["flagged_at", "detection_timestamp", "class", "confidence", "frame_path"]
 
-app = FastAPI()
+_relay = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _relay
+    try:
+        from gpiozero import LED
+        _relay = LED(GPIO_PIN, active_high=False)
+    except Exception:
+        _relay = None
+    yield
+    if _relay is not None:
+        _relay.close()
+        _relay = None
+
+
+app = FastAPI(lifespan=lifespan)
 
 FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/frames", StaticFiles(directory=str(FRAMES_DIR)), name="frames")
@@ -87,6 +110,21 @@ async def flag_detection(req: Request):
             "frame_path":          body.get("frame_path", ""),
         })
     return {"ok": True}
+
+
+@app.post("/api/spray")
+async def manual_spray(duration: float = 1.0):
+    duration = max(0.1, min(duration, 10.0))
+    if _relay is None:
+        return {"ok": False, "error": "GPIO not available (not running on Pi, or pin conflict)"}
+    _relay.on()
+    threading.Timer(duration, _relay.off).start()
+    return {"ok": True, "duration": duration}
+
+
+@app.get("/api/gpio-status")
+def gpio_status():
+    return {"available": _relay is not None}
 
 
 HTML = """<!DOCTYPE html>
@@ -219,6 +257,34 @@ HTML = """<!DOCTYPE html>
     @media (min-width: 1100px) {
       #cards { grid-template-columns: 1fr 1fr 1fr; }
     }
+
+    /* ── Hardware test panel ────────────────────────────────────────────── */
+    #test-panel {
+      margin: 12px; padding: 14px 16px;
+      background: #1a1a1a; border-radius: 10px;
+      border: 1px solid #2a2a2a;
+    }
+    #test-panel h2 { font-size: 0.8rem; color: #777; margin-bottom: 12px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .test-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    #spray-btn {
+      padding: 10px 22px; border-radius: 8px; font-size: 0.9rem; font-weight: 600;
+      background: #1a3a1a; border: 1px solid #2d6a2d; color: #4ade80; cursor: pointer;
+    }
+    #spray-btn:active { background: #2d6a2d; }
+    #spray-btn:disabled { opacity: 0.4; cursor: default; }
+    .dur-label { font-size: 0.8rem; color: #777; }
+    #dur-input {
+      width: 70px; padding: 6px 8px; border-radius: 6px;
+      background: #2a2a2a; border: 1px solid #3a3a3a; color: #eee; font-size: 0.85rem;
+    }
+    #spray-status { font-size: 0.8rem; margin-top: 8px; color: #555; min-height: 1.2em; }
+    #spray-status.ok  { color: #4ade80; }
+    #spray-status.err { color: #ef4444; }
+    #gpio-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      font-size: 0.7rem; background: #2a2a2a; color: #555;
+    }
+    #gpio-badge.live { background: #052e16; color: #4ade80; }
   </style>
 </head>
 <body>
@@ -247,6 +313,17 @@ HTML = """<!DOCTYPE html>
   </div>
 
   <div id="summary"></div>
+
+  <div id="test-panel">
+    <h2>Hardware Test &nbsp;<span id="gpio-badge">GPIO unavailable</span></h2>
+    <div class="test-row">
+      <button id="spray-btn" onclick="fireSpray()" disabled>Fire Spray</button>
+      <span class="dur-label">Duration (s)</span>
+      <input id="dur-input" type="number" value="1.0" min="0.1" max="10" step="0.1">
+    </div>
+    <div id="spray-status">Stop detect.py before testing.</div>
+  </div>
+
   <div id="cards"></div>
 
 </div><!-- #page -->
@@ -503,6 +580,64 @@ HTML = """<!DOCTYPE html>
 
     init();
     setInterval(load, 30000);
+
+    // ── Hardware test ────────────────────────────────────────────────────────
+
+    async function checkGpio() {
+      try {
+        const res = await fetch('/api/gpio-status');
+        const data = await res.json();
+        const badge = document.getElementById('gpio-badge');
+        const btn   = document.getElementById('spray-btn');
+        const status = document.getElementById('spray-status');
+        if (data.available) {
+          badge.textContent = 'GPIO live';
+          badge.classList.add('live');
+          btn.disabled = false;
+          status.textContent = 'Ready.';
+          status.className = '';
+        } else {
+          badge.textContent = 'GPIO unavailable';
+          badge.classList.remove('live');
+          btn.disabled = true;
+          status.textContent = 'Not running on Pi, or detect.py is using the pin.';
+          status.className = 'err';
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    async function fireSpray() {
+      const duration = parseFloat(document.getElementById('dur-input').value) || 1.0;
+      const btn    = document.getElementById('spray-btn');
+      const status = document.getElementById('spray-status');
+      btn.disabled = true;
+      status.textContent = 'Firing…';
+      status.className = '';
+      try {
+        const res  = await fetch('/api/spray?duration=' + duration, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          status.textContent = `Fired ${data.duration}s pulse. Valve should be open.`;
+          status.className = 'ok';
+          setTimeout(() => {
+            status.textContent = 'Done.';
+            status.className = '';
+            btn.disabled = false;
+          }, data.duration * 1000 + 200);
+        } else {
+          status.textContent = 'Error: ' + (data.error || 'unknown');
+          status.className = 'err';
+          btn.disabled = false;
+        }
+      } catch (e) {
+        status.textContent = 'Request failed.';
+        status.className = 'err';
+        btn.disabled = false;
+      }
+    }
+
+    checkGpio();
+    setInterval(checkGpio, 5000);
   </script>
 </body>
 </html>"""

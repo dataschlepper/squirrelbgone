@@ -87,9 +87,8 @@ def _setup_gpio():
     global _gpio_output
     try:
         from gpiozero import LED
-        # Phase 3: swap LED for OutputDevice(GPIO_PIN, active_high=False) for the relay
-        _gpio_output = LED(GPIO_PIN)
-        log.info(f"GPIO ready: LED on pin {GPIO_PIN}")
+        _gpio_output = LED(GPIO_PIN, active_high=False)
+        log.info(f"GPIO ready: relay on pin {GPIO_PIN} (active-low)")
     except Exception as exc:
         log.warning(f"GPIO unavailable ({exc}) — running without hardware output")
 

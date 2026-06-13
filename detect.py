@@ -23,6 +23,7 @@ Usage:
 
 import csv
 import datetime
+import json
 import logging
 import os
 import signal
@@ -49,6 +50,9 @@ WILDLIFE_CONFIDENCE_THRESHOLD = float(os.environ.get("WILDLIFE_CONFIDENCE_THRESH
 # Where to write logs and saved frames
 LOG_DIR    = Path(os.environ.get("LOG_DIR", "logs"))
 FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", "frames"))
+
+# Written by api/server.py when a manual spray is requested from the dashboard
+SPRAY_REQUEST_FILE = LOG_DIR / "spray.request"
 
 # Phase 2+: GPIO trigger
 GPIO_PIN           = int(os.environ.get("GPIO_PIN", "18"))
@@ -92,10 +96,26 @@ def _setup_gpio():
     except Exception as exc:
         log.warning(f"GPIO unavailable ({exc}) — running without hardware output")
 
-def _fire_gpio():
+def _fire_gpio(duration: float | None = None):
     if _gpio_output is None:
         return
-    _gpio_output.blink(on_time=SPRAY_DURATION_SEC, off_time=0, n=1, background=True)
+    _gpio_output.blink(on_time=duration or SPRAY_DURATION_SEC, off_time=0, n=1, background=True)
+
+
+def _check_spray_request():
+    if not SPRAY_REQUEST_FILE.exists():
+        return
+    try:
+        data = json.loads(SPRAY_REQUEST_FILE.read_text())
+        duration = float(data.get("duration", SPRAY_DURATION_SEC))
+    except Exception:
+        duration = SPRAY_DURATION_SEC
+    try:
+        SPRAY_REQUEST_FILE.unlink()
+    except Exception:
+        pass
+    _fire_gpio(duration)
+    log.info(f"Manual spray {duration}s (requested via dashboard)")
 
 def _cleanup_gpio():
     global _gpio_output
@@ -242,6 +262,8 @@ def main():
     try:
         while _running:
             now = time.monotonic()
+
+            _check_spray_request()
 
             if cap is None:
                 cap, reconnect_attempt = _reconnect(RTSP_URL, reconnect_attempt)

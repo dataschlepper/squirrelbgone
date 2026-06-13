@@ -6,15 +6,14 @@ Dashboard for reviewing detections and testing hardware.
 Usage (from repo root):
     uvicorn api.server:app --host 0.0.0.0 --port 8000
 
-Note: the /api/spray endpoint requires detect.py to be stopped first
-(both processes cannot hold the same GPIO pin simultaneously).
+Note: /api/spray writes a request file; detect.py picks it up on its next loop iteration.
+Both processes can run simultaneously.
 """
 
 import csv
 import datetime
+import json
 import os
-import threading
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,7 +25,6 @@ load_dotenv()
 
 LOG_DIR    = Path(os.environ.get("LOG_DIR",    "logs"))
 FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", "frames"))
-GPIO_PIN   = int(os.environ.get("GPIO_PIN", "18"))
 
 # Minimum confidence logged by detect.py
 LOG_THRESHOLD  = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.45"))
@@ -35,25 +33,9 @@ HIGH_CONF_THRESHOLD = float(os.environ.get("HIGH_CONF_THRESHOLD", "0.70"))
 
 CORRECTIONS_PATH   = LOG_DIR / "corrections.csv"
 CORRECTION_FIELDS  = ["flagged_at", "detection_timestamp", "class", "confidence", "frame_path"]
+SPRAY_REQUEST_FILE = LOG_DIR / "spray.request"
 
-_relay = None
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global _relay
-    try:
-        from gpiozero import LED
-        _relay = LED(GPIO_PIN, active_high=False)
-    except Exception:
-        _relay = None
-    yield
-    if _relay is not None:
-        _relay.close()
-        _relay = None
-
-
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/frames", StaticFiles(directory=str(FRAMES_DIR)), name="frames")
@@ -115,16 +97,14 @@ async def flag_detection(req: Request):
 @app.post("/api/spray")
 async def manual_spray(duration: float = 1.0):
     duration = max(0.1, min(duration, 10.0))
-    if _relay is None:
-        return {"ok": False, "error": "GPIO not available (not running on Pi, or pin conflict)"}
-    _relay.on()
-    threading.Timer(duration, _relay.off).start()
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    SPRAY_REQUEST_FILE.write_text(json.dumps({"duration": duration}))
     return {"ok": True, "duration": duration}
 
 
-@app.get("/api/gpio-status")
-def gpio_status():
-    return {"available": _relay is not None}
+@app.get("/api/spray-status")
+def spray_status():
+    return {"pending": SPRAY_REQUEST_FILE.exists()}
 
 
 HTML = """<!DOCTYPE html>
@@ -278,13 +258,9 @@ HTML = """<!DOCTYPE html>
       background: #2a2a2a; border: 1px solid #3a3a3a; color: #eee; font-size: 0.85rem;
     }
     #spray-status { font-size: 0.8rem; margin-top: 8px; color: #555; min-height: 1.2em; }
-    #spray-status.ok  { color: #4ade80; }
-    #spray-status.err { color: #ef4444; }
-    #gpio-badge {
-      display: inline-block; padding: 2px 8px; border-radius: 10px;
-      font-size: 0.7rem; background: #2a2a2a; color: #555;
-    }
-    #gpio-badge.live { background: #052e16; color: #4ade80; }
+    #spray-status.ok      { color: #4ade80; }
+    #spray-status.pending { color: #f59e0b; }
+    #spray-status.err     { color: #ef4444; }
   </style>
 </head>
 <body>
@@ -315,13 +291,13 @@ HTML = """<!DOCTYPE html>
   <div id="summary"></div>
 
   <div id="test-panel">
-    <h2>Hardware Test &nbsp;<span id="gpio-badge">GPIO unavailable</span></h2>
+    <h2>Hardware Test</h2>
     <div class="test-row">
-      <button id="spray-btn" onclick="fireSpray()" disabled>Fire Spray</button>
+      <button id="spray-btn" onclick="fireSpray()">Fire Spray</button>
       <span class="dur-label">Duration (s)</span>
       <input id="dur-input" type="number" value="1.0" min="0.1" max="10" step="0.1">
     </div>
-    <div id="spray-status">Stop detect.py before testing.</div>
+    <div id="spray-status">Queues a spray request — detect.py fires it on its next loop.</div>
   </div>
 
   <div id="cards"></div>
@@ -583,49 +559,22 @@ HTML = """<!DOCTYPE html>
 
     // ── Hardware test ────────────────────────────────────────────────────────
 
-    async function checkGpio() {
-      try {
-        const res = await fetch('/api/gpio-status');
-        const data = await res.json();
-        const badge = document.getElementById('gpio-badge');
-        const btn   = document.getElementById('spray-btn');
-        const status = document.getElementById('spray-status');
-        if (data.available) {
-          badge.textContent = 'GPIO live';
-          badge.classList.add('live');
-          btn.disabled = false;
-          status.textContent = 'Ready.';
-          status.className = '';
-        } else {
-          badge.textContent = 'GPIO unavailable';
-          badge.classList.remove('live');
-          btn.disabled = true;
-          status.textContent = 'Not running on Pi, or detect.py is using the pin.';
-          status.className = 'err';
-        }
-      } catch (e) { /* ignore */ }
-    }
-
     async function fireSpray() {
       const duration = parseFloat(document.getElementById('dur-input').value) || 1.0;
       const btn    = document.getElementById('spray-btn');
       const status = document.getElementById('spray-status');
       btn.disabled = true;
-      status.textContent = 'Firing…';
+      status.textContent = 'Queuing…';
       status.className = '';
       try {
         const res  = await fetch('/api/spray?duration=' + duration, { method: 'POST' });
         const data = await res.json();
         if (data.ok) {
-          status.textContent = `Fired ${data.duration}s pulse. Valve should be open.`;
-          status.className = 'ok';
-          setTimeout(() => {
-            status.textContent = 'Done.';
-            status.className = '';
-            btn.disabled = false;
-          }, data.duration * 1000 + 200);
+          status.textContent = `Queued ${data.duration}s spray — waiting for detect.py…`;
+          status.className = 'pending';
+          pollSprayStatus(data.duration);
         } else {
-          status.textContent = 'Error: ' + (data.error || 'unknown');
+          status.textContent = 'Error queuing request.';
           status.className = 'err';
           btn.disabled = false;
         }
@@ -636,8 +585,29 @@ HTML = """<!DOCTYPE html>
       }
     }
 
-    checkGpio();
-    setInterval(checkGpio, 5000);
+    async function pollSprayStatus(duration) {
+      const status = document.getElementById('spray-btn');
+      const statusEl = document.getElementById('spray-status');
+      let attempts = 0;
+      const interval = setInterval(async () => {
+        attempts++;
+        try {
+          const res  = await fetch('/api/spray-status');
+          const data = await res.json();
+          if (!data.pending) {
+            clearInterval(interval);
+            statusEl.textContent = `Fired ${duration}s pulse.`;
+            statusEl.className = 'ok';
+            document.getElementById('spray-btn').disabled = false;
+          } else if (attempts > 20) {
+            clearInterval(interval);
+            statusEl.textContent = 'Timed out — is detect.py running?';
+            statusEl.className = 'err';
+            document.getElementById('spray-btn').disabled = false;
+          }
+        } catch (e) { clearInterval(interval); }
+      }, 500);
+    }
   </script>
 </body>
 </html>"""

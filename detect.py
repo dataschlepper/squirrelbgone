@@ -51,8 +51,9 @@ WILDLIFE_CONFIDENCE_THRESHOLD = float(os.environ.get("WILDLIFE_CONFIDENCE_THRESH
 LOG_DIR    = Path(os.environ.get("LOG_DIR", "logs"))
 FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", "frames"))
 
-# Written by api/server.py when a manual spray is requested from the dashboard
-SPRAY_REQUEST_FILE = LOG_DIR / "spray.request"
+# Written by api/server.py for dashboard controls
+SPRAY_REQUEST_FILE   = LOG_DIR / "spray.request"
+SOLENOID_STATE_FILE  = LOG_DIR / "solenoid.state"
 
 # Phase 2+: GPIO trigger
 GPIO_PIN           = int(os.environ.get("GPIO_PIN", "18"))
@@ -96,6 +97,9 @@ def _setup_gpio():
     except Exception as exc:
         log.warning(f"GPIO unavailable ({exc}) — running without hardware output")
 
+_solenoid_toggled_on = False
+
+
 def _fire_gpio(duration: float | None = None):
     if _gpio_output is None:
         return
@@ -103,19 +107,34 @@ def _fire_gpio(duration: float | None = None):
 
 
 def _check_spray_request():
-    if not SPRAY_REQUEST_FILE.exists():
-        return
-    try:
-        data = json.loads(SPRAY_REQUEST_FILE.read_text())
-        duration = float(data.get("duration", SPRAY_DURATION_SEC))
-    except Exception:
-        duration = SPRAY_DURATION_SEC
-    try:
-        SPRAY_REQUEST_FILE.unlink()
-    except Exception:
-        pass
-    _fire_gpio(duration)
-    log.info(f"Manual spray {duration}s (requested via dashboard)")
+    global _solenoid_toggled_on
+
+    # Toggle state — persist until changed
+    if SOLENOID_STATE_FILE.exists():
+        try:
+            data = json.loads(SOLENOID_STATE_FILE.read_text())
+            want_on = bool(data.get("on", False))
+            if want_on != _solenoid_toggled_on:
+                _solenoid_toggled_on = want_on
+                if _gpio_output is not None:
+                    _gpio_output.on() if want_on else _gpio_output.off()
+                log.info(f"Solenoid toggled {'ON' if want_on else 'OFF'} (dashboard)")
+        except Exception:
+            pass
+
+    # Timed pulse — ignored while toggled on
+    if not _solenoid_toggled_on and SPRAY_REQUEST_FILE.exists():
+        try:
+            data = json.loads(SPRAY_REQUEST_FILE.read_text())
+            duration = float(data.get("duration", SPRAY_DURATION_SEC))
+        except Exception:
+            duration = SPRAY_DURATION_SEC
+        try:
+            SPRAY_REQUEST_FILE.unlink()
+        except Exception:
+            pass
+        _fire_gpio(duration)
+        log.info(f"Manual spray {duration}s (requested via dashboard)")
 
 def _cleanup_gpio():
     global _gpio_output

@@ -33,7 +33,8 @@ HIGH_CONF_THRESHOLD = float(os.environ.get("HIGH_CONF_THRESHOLD", "0.70"))
 
 CORRECTIONS_PATH   = LOG_DIR / "corrections.csv"
 CORRECTION_FIELDS  = ["flagged_at", "detection_timestamp", "class", "confidence", "frame_path"]
-SPRAY_REQUEST_FILE = LOG_DIR / "spray.request"
+SPRAY_REQUEST_FILE  = LOG_DIR / "spray.request"
+SOLENOID_STATE_FILE = LOG_DIR / "solenoid.state"
 
 app = FastAPI()
 
@@ -105,6 +106,29 @@ async def manual_spray(duration: float = 1.0):
 @app.get("/api/spray-status")
 def spray_status():
     return {"pending": SPRAY_REQUEST_FILE.exists()}
+
+
+@app.post("/api/solenoid/on")
+def solenoid_on():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    SOLENOID_STATE_FILE.write_text(json.dumps({"on": True}))
+    return {"ok": True, "on": True}
+
+
+@app.post("/api/solenoid/off")
+def solenoid_off():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    SOLENOID_STATE_FILE.write_text(json.dumps({"on": False}))
+    return {"ok": True, "on": False}
+
+
+@app.get("/api/solenoid-status")
+def solenoid_status():
+    try:
+        data = json.loads(SOLENOID_STATE_FILE.read_text())
+        return {"on": bool(data.get("on", False))}
+    except Exception:
+        return {"on": False}
 
 
 HTML = """<!DOCTYPE html>
@@ -261,6 +285,19 @@ HTML = """<!DOCTYPE html>
     #spray-status.ok      { color: #4ade80; }
     #spray-status.pending { color: #f59e0b; }
     #spray-status.err     { color: #ef4444; }
+    .test-divider { border: none; border-top: 1px solid #2a2a2a; margin: 10px 0; }
+    #toggle-btn {
+      padding: 10px 22px; border-radius: 8px; font-size: 0.9rem; font-weight: 600;
+      background: #1a1a2e; border: 1px solid #2d2d6a; color: #818cf8; cursor: pointer;
+      min-width: 120px;
+    }
+    #toggle-btn.on  { background: #3a1a1a; border-color: #6a2d2d; color: #f87171; }
+    #toggle-btn:disabled { opacity: 0.4; cursor: default; }
+    .solenoid-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #333; display: inline-block; margin-right: 6px; vertical-align: middle;
+    }
+    .solenoid-dot.on { background: #f87171; box-shadow: 0 0 6px #f87171; }
   </style>
 </head>
 <body>
@@ -298,6 +335,14 @@ HTML = """<!DOCTYPE html>
       <input id="dur-input" type="number" value="1.0" min="0.1" max="10" step="0.1">
     </div>
     <div id="spray-status">Queues a spray request — detect.py fires it on its next loop.</div>
+    <hr class="test-divider">
+    <div class="test-row">
+      <button id="toggle-btn" onclick="toggleSolenoid()">
+        <span class="solenoid-dot" id="solenoid-dot"></span>
+        <span id="toggle-label">Turn On</span>
+      </button>
+      <span class="dur-label" id="toggle-hint">Hold open until turned off</span>
+    </div>
   </div>
 
   <div id="cards"></div>
@@ -586,7 +631,6 @@ HTML = """<!DOCTYPE html>
     }
 
     async function pollSprayStatus(duration) {
-      const status = document.getElementById('spray-btn');
       const statusEl = document.getElementById('spray-status');
       let attempts = 0;
       const interval = setInterval(async () => {
@@ -608,6 +652,44 @@ HTML = """<!DOCTYPE html>
         } catch (e) { clearInterval(interval); }
       }, 500);
     }
+
+    let _solenoidOn = false;
+
+    function updateToggleUI(on) {
+      _solenoidOn = on;
+      const btn   = document.getElementById('toggle-btn');
+      const dot   = document.getElementById('solenoid-dot');
+      const label = document.getElementById('toggle-label');
+      const hint  = document.getElementById('toggle-hint');
+      btn.classList.toggle('on', on);
+      dot.classList.toggle('on', on);
+      label.textContent = on ? 'Turn Off' : 'Turn On';
+      hint.textContent  = on ? 'Solenoid is OPEN' : 'Hold open until turned off';
+      document.getElementById('spray-btn').disabled = on;
+    }
+
+    async function toggleSolenoid() {
+      const btn = document.getElementById('toggle-btn');
+      btn.disabled = true;
+      try {
+        const endpoint = _solenoidOn ? '/api/solenoid/off' : '/api/solenoid/on';
+        const res  = await fetch(endpoint, { method: 'POST' });
+        const data = await res.json();
+        updateToggleUI(data.on);
+      } catch (e) { /* ignore */ }
+      btn.disabled = false;
+    }
+
+    async function syncSolenoidStatus() {
+      try {
+        const res  = await fetch('/api/solenoid-status');
+        const data = await res.json();
+        updateToggleUI(data.on);
+      } catch (e) { /* ignore */ }
+    }
+
+    syncSolenoidStatus();
+    setInterval(syncSolenoidStatus, 3000);
   </script>
 </body>
 </html>"""

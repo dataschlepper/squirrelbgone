@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -56,7 +57,7 @@ SPRAY_REQUEST_FILE   = LOG_DIR / "spray.request"
 SOLENOID_STATE_FILE  = LOG_DIR / "solenoid.state"
 
 # Phase 2+: GPIO trigger
-GPIO_PIN           = int(os.environ.get("GPIO_PIN", "18"))
+GPIO_PIN           = int(os.environ.get("GPIO_PIN", "17"))
 COOLDOWN_SEC       = float(os.environ.get("COOLDOWN_SEC", "10"))
 DAY_START          = int(os.environ.get("DAY_START", "7"))   # hour 0–23, inclusive
 DAY_END            = int(os.environ.get("DAY_END", "20"))    # hour 0–23, exclusive
@@ -85,28 +86,62 @@ logging.basicConfig(
 log = logging.getLogger("sbg")
 
 # ─── GPIO ─────────────────────────────────────────────────────────────────────
+#
+# Control scheme (verified on hardware):
+#   OFF / valve closed  →  GPIO17 = input, no pull  (external 5V pull-up holds relay IN high)
+#   ON  / valve open    →  GPIO17 = output, drive low  (pulls relay IN to 0V, energises relay)
+#
+# Never drive the pin high to turn off: Pi 3.3V logic-high can't release a relay
+# with a 5V pull-up on IN.  "Off" means releasing the pin to input.
 
-_gpio_output = None
+_gpio_available = False
 
-def _setup_gpio():
-    global _gpio_output
+
+def _gpio_release() -> None:
+    """Set GPIO17 to input/no-pull — external pull-up closes the relay (fail-safe off)."""
+    subprocess.run(
+        ["pinctrl", "set", str(GPIO_PIN), "ip", "pn"],
+        check=False, capture_output=True,
+    )
+
+
+def _gpio_drive_low() -> None:
+    """Drive GPIO17 output low — pulls relay IN to 0V, energises relay, opens valve."""
+    subprocess.run(
+        ["pinctrl", "set", str(GPIO_PIN), "op", "dl"],
+        check=False, capture_output=True,
+    )
+
+
+def _setup_gpio() -> None:
+    global _gpio_available
     try:
-        from gpiozero import LED
-        _gpio_output = LED(GPIO_PIN, active_high=False)
-        log.info(f"GPIO ready: relay on pin {GPIO_PIN} (active-low)")
+        subprocess.run(
+            ["pinctrl", "set", str(GPIO_PIN), "ip", "pn"],
+            check=True, capture_output=True,
+        )
+        _gpio_available = True
+        log.info(f"GPIO ready: relay on pin {GPIO_PIN} (pinctrl, active-low)")
     except Exception as exc:
         log.warning(f"GPIO unavailable ({exc}) — running without hardware output")
+
 
 _solenoid_toggled_on = False
 
 
-def _fire_gpio(duration: float | None = None):
-    if _gpio_output is None:
+def _fire_gpio(duration: float | None = None) -> None:
+    """Open valve for `duration` seconds, then release. try/finally ensures valve closes on crash."""
+    if not _gpio_available:
         return
-    _gpio_output.blink(on_time=duration or SPRAY_DURATION_SEC, off_time=0, n=1, background=True)
+    dur = duration or SPRAY_DURATION_SEC
+    try:
+        _gpio_drive_low()
+        time.sleep(dur)
+    finally:
+        _gpio_release()
 
 
-def _check_spray_request():
+def _check_spray_request() -> None:
     global _solenoid_toggled_on
 
     # Toggle state — persist until changed
@@ -116,8 +151,8 @@ def _check_spray_request():
             want_on = bool(data.get("on", False))
             if want_on != _solenoid_toggled_on:
                 _solenoid_toggled_on = want_on
-                if _gpio_output is not None:
-                    _gpio_output.on() if want_on else _gpio_output.off()
+                if _gpio_available:
+                    _gpio_drive_low() if want_on else _gpio_release()
                 log.info(f"Solenoid toggled {'ON' if want_on else 'OFF'} (dashboard)")
         except Exception:
             pass
@@ -136,11 +171,10 @@ def _check_spray_request():
         _fire_gpio(duration)
         log.info(f"Manual spray {duration}s (requested via dashboard)")
 
-def _cleanup_gpio():
-    global _gpio_output
-    if _gpio_output is not None:
-        _gpio_output.close()
-        _gpio_output = None
+
+def _cleanup_gpio() -> None:
+    """Ensure valve is closed on exit — safe to call even if GPIO never initialised."""
+    _gpio_release()
 
 # ─── SHUTDOWN ─────────────────────────────────────────────────────────────────
 

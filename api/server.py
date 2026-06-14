@@ -10,15 +10,18 @@ Note: /api/spray writes a request file; detect.py picks it up on its next loop i
 Both processes can run simultaneously.
 """
 
+import asyncio
 import csv
 import datetime
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
@@ -37,6 +40,60 @@ SPRAY_REQUEST_FILE  = LOG_DIR / "spray.request"
 SOLENOID_STATE_FILE = LOG_DIR / "solenoid.state"
 
 app = FastAPI()
+
+# ── MJPEG live stream ─────────────────────────────────────────────────────────
+_frame_lock   = threading.Lock()
+_latest_frame: bytes | None = None
+
+
+def _rtsp_capture_loop() -> None:
+    global _latest_frame
+    try:
+        import cv2  # noqa: PLC0415
+    except ImportError:
+        return
+    rtsp_url = os.environ.get("RTSP_URL", "")
+    if not rtsp_url:
+        return
+    while True:
+        cap = cv2.VideoCapture(rtsp_url)
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                h, w = frame.shape[:2]
+                if w > 960:
+                    scale = 960 / w
+                    frame = cv2.resize(frame, (960, int(h * scale)))
+                ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
+                if ok:
+                    with _frame_lock:
+                        _latest_frame = jpg.tobytes()
+        finally:
+            cap.release()
+        time.sleep(2)
+
+
+threading.Thread(target=_rtsp_capture_loop, daemon=True).start()
+
+
+async def _mjpeg_gen():
+    while True:
+        with _frame_lock:
+            frame = _latest_frame
+        if frame:
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+        await asyncio.sleep(0.1)
+
+
+@app.get("/api/stream")
+async def mjpeg_stream():
+    return StreamingResponse(
+        _mjpeg_gen(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
 
 FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/frames", StaticFiles(directory=str(FRAMES_DIR)), name="frames")
@@ -129,6 +186,506 @@ def solenoid_status():
         return {"on": bool(data.get("on", False))}
     except Exception:
         return {"on": False}
+
+
+MOBILE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SquirrelBGone 💦</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Nunito:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --pool:   #00B4D8;
+      --sky:    #90E0EF;
+      --deep:   #0077B6;
+      --pink:   #FF006E;
+      --coral:  #FF6B6B;
+      --yellow: #FFD166;
+      --mint:   #06D6A0;
+      --cream:  #FFF9F0;
+      --navy:   #023E8A;
+    }
+
+    body {
+      font-family: 'Nunito', sans-serif;
+      background: linear-gradient(160deg, #CAF0F8 0%, #90E0EF 40%, #48CAE4 70%, #00B4D8 100%);
+      min-height: 100vh;
+      color: var(--navy);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    header {
+      background: linear-gradient(135deg, #023E8A 0%, #0077B6 60%, #00B4D8 100%);
+      padding: 18px 20px 22px;
+      text-align: center;
+      box-shadow: 0 4px 20px rgba(0,60,120,0.35);
+      clip-path: ellipse(100% 100% at 50% 0%);
+    }
+    h1 {
+      font-family: 'Pacifico', cursive;
+      font-size: 2.2rem;
+      color: var(--yellow);
+      text-shadow: 3px 3px 0 rgba(0,0,0,0.25), 0 0 30px rgba(255,209,102,0.4);
+    }
+    .tagline {
+      font-size: 0.72rem;
+      color: var(--sky);
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      margin-top: 4px;
+    }
+
+    /* ── Main ───────────────────────────────────────────────────────────── */
+    main {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 16px 14px 48px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* ── Card ───────────────────────────────────────────────────────────── */
+    .card {
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-radius: 22px;
+      box-shadow: 0 4px 24px rgba(0, 100, 160, 0.13), 0 1px 4px rgba(0,0,0,0.06);
+      overflow: hidden;
+    }
+    .card-inner { padding: 16px; }
+
+    /* ── Live cam ───────────────────────────────────────────────────────── */
+    .cam-header {
+      padding: 10px 16px 8px;
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,0.6);
+      border-bottom: 1px solid rgba(0,180,216,0.2);
+    }
+    .live-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e;
+      animation: blink 1.4s ease-in-out infinite;
+    }
+    .live-label { font-weight: 900; font-size: 0.8rem; color: #16a34a; letter-spacing: 2px; }
+    #stream-img {
+      width: 100%; display: block;
+      background: #0a0a1a;
+      min-height: 200px;
+      object-fit: contain;
+    }
+    .no-stream {
+      min-height: 200px;
+      display: none;
+      flex-direction: column;
+      align-items: center; justify-content: center;
+      background: #0a0a1a;
+      color: #555; gap: 8px;
+      font-size: 0.85rem; font-weight: 700;
+    }
+    .no-stream-icon { font-size: 3rem; }
+
+    /* ── Stats ──────────────────────────────────────────────────────────── */
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px; }
+    .stat {
+      background: linear-gradient(145deg, var(--deep), var(--pool));
+      border-radius: 16px; padding: 14px 10px;
+      text-align: center; color: white;
+    }
+    .stat-num {
+      font-family: 'Pacifico', cursive;
+      font-size: 2.2rem; color: var(--yellow);
+      line-height: 1;
+      text-shadow: 2px 2px 0 rgba(0,0,0,0.2);
+    }
+    .stat-label { font-size: 0.7rem; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; opacity: 0.88; margin-top: 5px; }
+
+    /* ── Blast button ───────────────────────────────────────────────────── */
+    .blast-card .card-inner { text-align: center; padding: 20px 16px 22px; }
+    .section-title {
+      font-family: 'Pacifico', cursive;
+      font-size: 1.05rem; color: var(--navy);
+      margin-bottom: 18px;
+    }
+
+    #blast-btn {
+      width: 190px; height: 190px;
+      border-radius: 50%; border: none;
+      background: linear-gradient(145deg, #FF6B6B, #FF006E);
+      color: white;
+      font-family: 'Nunito', sans-serif;
+      font-weight: 900; font-size: 1.25rem;
+      cursor: pointer;
+      box-shadow: 0 8px 0 #990042, 0 14px 28px rgba(255,0,110,0.45);
+      transform: translateY(0);
+      transition: transform 0.08s, box-shadow 0.08s;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2px;
+      margin: 0 auto 18px;
+      position: relative; overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #blast-btn .btn-emoji { font-size: 3rem; line-height: 1; }
+    #blast-btn .btn-text  { font-size: 1.1rem; letter-spacing: 1px; }
+
+    #blast-btn:active:not(:disabled) {
+      transform: translateY(6px);
+      box-shadow: 0 2px 0 #990042, 0 4px 12px rgba(255,0,110,0.35);
+    }
+    #blast-btn:disabled {
+      background: linear-gradient(145deg, #bbb, #999);
+      box-shadow: 0 6px 0 #666, 0 10px 18px rgba(0,0,0,0.18);
+      cursor: not-allowed;
+    }
+    #blast-btn:not(:disabled) {
+      animation: idle-pulse 2.4s ease-in-out infinite;
+    }
+    @keyframes idle-pulse {
+      0%, 100% { box-shadow: 0 8px 0 #990042, 0 14px 28px rgba(255,0,110,0.45); }
+      50%       { box-shadow: 0 8px 0 #990042, 0 18px 42px rgba(255,0,110,0.7); }
+    }
+
+    /* water drop spawn animation */
+    @keyframes drop-up {
+      0%   { transform: translateY(0)    scale(1);   opacity: 1; }
+      100% { transform: translateY(-90px) scale(0.4); opacity: 0; }
+    }
+    .drop {
+      position: absolute; pointer-events: none;
+      font-size: 1.6rem;
+      animation: drop-up 0.75s ease-out forwards;
+    }
+
+    /* ── Duration row ───────────────────────────────────────────────────── */
+    .dur-row {
+      display: flex; align-items: center; justify-content: center;
+      gap: 10px; margin-bottom: 14px;
+    }
+    .dur-label { font-weight: 900; color: var(--navy); font-size: 0.85rem; }
+    #dur-input {
+      width: 80px; padding: 8px 10px;
+      border: 3px solid var(--pool); border-radius: 12px;
+      font-family: 'Nunito', sans-serif; font-size: 0.95rem; font-weight: 700;
+      color: var(--navy); text-align: center; background: white; outline: none;
+    }
+    #dur-input:focus { border-color: var(--deep); }
+
+    /* ── Status ─────────────────────────────────────────────────────────── */
+    #blast-status {
+      min-height: 1.5em;
+      font-weight: 700; font-size: 0.88rem;
+      color: #555; transition: color 0.2s;
+    }
+    #blast-status.wait { color: var(--pool); }
+    #blast-status.ok   { color: #16a34a; }
+    #blast-status.err  { color: #dc2626; }
+
+    /* ── Solenoid ───────────────────────────────────────────────────────── */
+    .solenoid-inner {
+      padding: 16px; text-align: center;
+    }
+    .solenoid-label {
+      font-size: 0.7rem; font-weight: 900; text-transform: uppercase;
+      letter-spacing: 2px; color: #888; margin-bottom: 12px;
+    }
+    .solenoid-row {
+      display: flex; align-items: center; justify-content: center; gap: 14px;
+    }
+    .solenoid-dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #ccc; flex-shrink: 0;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    .solenoid-dot.on { background: #22c55e; box-shadow: 0 0 12px #22c55e; }
+    #solenoid-btn {
+      padding: 12px 28px; border-radius: 14px;
+      border: 3px solid var(--deep);
+      background: white; color: var(--deep);
+      font-family: 'Nunito', sans-serif; font-size: 0.95rem; font-weight: 900;
+      cursor: pointer; transition: all 0.2s;
+    }
+    #solenoid-btn.on {
+      background: linear-gradient(135deg, #15803d, #22c55e);
+      border-color: #15803d; color: white;
+    }
+    #solenoid-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .solenoid-hint {
+      font-size: 0.75rem; color: #888; margin-top: 10px; font-style: italic;
+    }
+
+    /* ── Recent detections ──────────────────────────────────────────────── */
+    .recent-inner { padding: 14px 14px 16px; }
+    .recent-label {
+      font-size: 0.7rem; font-weight: 900; text-transform: uppercase;
+      letter-spacing: 2px; color: #888; margin-bottom: 10px;
+    }
+    .det-scroll {
+      display: flex; gap: 10px;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
+      padding-bottom: 4px; scrollbar-width: none;
+    }
+    .det-scroll::-webkit-scrollbar { display: none; }
+    .det-chip {
+      flex-shrink: 0;
+      background: linear-gradient(135deg, var(--deep), var(--pool));
+      border-radius: 12px; padding: 9px 14px;
+      color: white; font-size: 0.8rem; font-weight: 700; white-space: nowrap;
+    }
+    .det-class { color: var(--yellow); display: block; }
+    .det-empty { color: #aaa; font-size: 0.85rem; font-style: italic; }
+
+    /* ── Animations ─────────────────────────────────────────────────────── */
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+
+    /* ── Footer ─────────────────────────────────────────────────────────── */
+    footer {
+      text-align: center; padding: 12px 20px 24px;
+      font-size: 0.68rem; color: rgba(0,80,140,0.55); font-weight: 700;
+    }
+    footer a { color: var(--deep); text-decoration: none; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🐿️ SquirrelBGone 💦</h1>
+  <p class="tagline">Spray First · Ask Questions Never</p>
+</header>
+
+<main>
+
+  <!-- Live cam -->
+  <div class="card">
+    <div class="cam-header">
+      <div class="live-dot"></div>
+      <span class="live-label">LIVE</span>
+    </div>
+    <img id="stream-img" src="/api/stream" alt="Live cam"
+         onerror="showNoStream()" onload="hideNoStream()">
+    <div id="no-stream" class="no-stream">
+      <span class="no-stream-icon">📷</span>
+      <span>Camera offline</span>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="card">
+    <div class="stats-grid">
+      <div class="stat">
+        <div class="stat-num" id="squirrel-count">—</div>
+        <div class="stat-label">🐿️ Squirrels Today</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num" id="last-seen" style="font-size:1.4rem">—</div>
+        <div class="stat-label">⏱️ Last Spotted</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Blast button -->
+  <div class="card blast-card">
+    <div class="card-inner">
+      <div class="section-title">🎯 Manual Fire Control</div>
+      <button id="blast-btn" onclick="fireSpray()">
+        <span class="btn-emoji">💦</span>
+        <span class="btn-text">BLAST&nbsp;'EM</span>
+      </button>
+      <div class="dur-row">
+        <span class="dur-label">Duration</span>
+        <input id="dur-input" type="number" value="1.0" min="0.1" max="10" step="0.1">
+        <span class="dur-label">sec</span>
+      </div>
+      <div id="blast-status">Ready to soak that fuzzy menace 🐿️</div>
+    </div>
+  </div>
+
+  <!-- Solenoid hold-open -->
+  <div class="card">
+    <div class="solenoid-inner">
+      <div class="solenoid-label">🚰 Solenoid — Hold Open</div>
+      <div class="solenoid-row">
+        <div class="solenoid-dot" id="solenoid-dot"></div>
+        <button id="solenoid-btn" onclick="toggleSolenoid()">💧 Turn On</button>
+      </div>
+      <div class="solenoid-hint" id="solenoid-hint">Holds valve open until manually turned off</div>
+    </div>
+  </div>
+
+  <!-- Recent detections -->
+  <div class="card">
+    <div class="recent-inner">
+      <div class="recent-label">🔍 Recent Detections</div>
+      <div class="det-scroll" id="det-scroll">
+        <span class="det-empty">Loading…</span>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  SquirrelBGone &nbsp;·&nbsp; <a href="/">Full dashboard →</a>
+</footer>
+
+<script>
+  // ── Stream error handling ────────────────────────────────────────────────
+  function showNoStream() {
+    document.getElementById('stream-img').style.display = 'none';
+    document.getElementById('no-stream').style.display = 'flex';
+  }
+  function hideNoStream() {
+    document.getElementById('stream-img').style.display = 'block';
+    document.getElementById('no-stream').style.display = 'none';
+  }
+
+  // ── Water drop animation ─────────────────────────────────────────────────
+  function spawnDrops(btn) {
+    const emojis = ['💦', '💧', '🌊', '💦', '💧'];
+    for (let i = 0; i < 7; i++) {
+      const el = document.createElement('span');
+      el.className = 'drop';
+      el.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+      el.style.left = (15 + Math.random() * 70) + '%';
+      el.style.top  = (20 + Math.random() * 60) + '%';
+      el.style.animationDelay    = (Math.random() * 0.25) + 's';
+      el.style.animationDuration = (0.55 + Math.random() * 0.4) + 's';
+      btn.appendChild(el);
+      el.addEventListener('animationend', () => el.remove());
+    }
+  }
+
+  // ── Spray ────────────────────────────────────────────────────────────────
+  async function fireSpray() {
+    const duration = parseFloat(document.getElementById('dur-input').value) || 1.0;
+    const btn    = document.getElementById('blast-btn');
+    const status = document.getElementById('blast-status');
+    btn.disabled = true;
+    spawnDrops(btn);
+    status.textContent = 'Firing! 💦💦💦';
+    status.className = 'wait';
+    try {
+      const res  = await fetch('/api/spray?duration=' + duration, { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        status.textContent = `${data.duration}s spray queued — waiting for detect.py…`;
+        status.className = 'wait';
+        pollSpray(data.duration, btn, status);
+      } else {
+        status.textContent = 'Something went wrong 😬';
+        status.className = 'err';
+        btn.disabled = false;
+      }
+    } catch {
+      status.textContent = 'Connection error 📡';
+      status.className = 'err';
+      btn.disabled = false;
+    }
+  }
+
+  async function pollSpray(duration, btn, status) {
+    let n = 0;
+    const t = setInterval(async () => {
+      n++;
+      try {
+        const data = await (await fetch('/api/spray-status')).json();
+        if (!data.pending) {
+          clearInterval(t);
+          status.textContent = `GOTCHA! 🐿️💦 (${duration}s blast complete)`;
+          status.className = 'ok';
+          btn.disabled = false;
+        } else if (n > 30) {
+          clearInterval(t);
+          status.textContent = 'Timed out — is detect.py running? 🤔';
+          status.className = 'err';
+          btn.disabled = false;
+        }
+      } catch { clearInterval(t); btn.disabled = false; }
+    }, 500);
+  }
+
+  // ── Solenoid ─────────────────────────────────────────────────────────────
+  let _solenoidOn = false;
+
+  function updateSolenoidUI(on) {
+    _solenoidOn = on;
+    const btn  = document.getElementById('solenoid-btn');
+    const dot  = document.getElementById('solenoid-dot');
+    const hint = document.getElementById('solenoid-hint');
+    btn.textContent = on ? '🔴 Turn Off' : '💧 Turn On';
+    btn.classList.toggle('on', on);
+    dot.classList.toggle('on', on);
+    hint.textContent = on ? 'Valve is OPEN — water flowing! 🌊' : 'Holds valve open until manually turned off';
+    document.getElementById('blast-btn').disabled = on;
+  }
+
+  async function toggleSolenoid() {
+    const btn = document.getElementById('solenoid-btn');
+    btn.disabled = true;
+    try {
+      const url  = _solenoidOn ? '/api/solenoid/off' : '/api/solenoid/on';
+      const data = await (await fetch(url, { method: 'POST' })).json();
+      updateSolenoidUI(data.on);
+    } catch {}
+    btn.disabled = false;
+  }
+
+  async function syncSolenoid() {
+    try {
+      const data = await (await fetch('/api/solenoid-status')).json();
+      updateSolenoidUI(data.on);
+    } catch {}
+  }
+
+  // ── Stats ────────────────────────────────────────────────────────────────
+  function ago(isoStr) {
+    const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+    if (diff < 60)   return diff + 's';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm';
+    return Math.floor(diff / 3600) + 'h';
+  }
+
+  async function loadStats() {
+    try {
+      const n = new Date();
+      const mins = n.getHours() * 60 + n.getMinutes() + 1;
+      const data = await (await fetch('/api/detections?minutes=' + mins)).json();
+      const squirrels = data.filter(d => d.class === 'squirrel');
+      document.getElementById('squirrel-count').textContent = squirrels.length;
+      const last = squirrels[0];
+      document.getElementById('last-seen').textContent = last ? ago(last.timestamp) + ' ago' : 'None today';
+
+      const scroll = document.getElementById('det-scroll');
+      if (!data.length) {
+        scroll.innerHTML = '<span class="det-empty">No detections today 🌤️</span>';
+      } else {
+        scroll.innerHTML = data.slice(0, 10).map(d => `
+          <div class="det-chip">
+            <span class="det-class">${d.class}</span>
+            ${Math.round(d.confidence * 100)}% · ${ago(d.timestamp)} ago
+          </div>`).join('');
+      }
+    } catch {}
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  syncSolenoid();
+  loadStats();
+  setInterval(syncSolenoid, 3000);
+  setInterval(loadStats, 30000);
+</script>
+</body>
+</html>"""
 
 
 HTML = """<!DOCTYPE html>
@@ -698,3 +1255,8 @@ HTML = """<!DOCTYPE html>
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTML
+
+
+@app.get("/mobile", response_class=HTMLResponse)
+def mobile():
+    return MOBILE_HTML

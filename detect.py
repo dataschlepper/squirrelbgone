@@ -61,7 +61,8 @@ GPIO_PIN           = int(os.environ.get("GPIO_PIN", "17"))
 COOLDOWN_SEC       = float(os.environ.get("COOLDOWN_SEC", "10"))
 DAY_START          = int(os.environ.get("DAY_START", "7"))   # hour 0–23, inclusive
 DAY_END            = int(os.environ.get("DAY_END", "20"))    # hour 0–23, exclusive
-SPRAY_DURATION_SEC = float(os.environ.get("SPRAY_DURATION_SEC", "1.0"))
+SPRAY_DURATION_SEC        = float(os.environ.get("SPRAY_DURATION_SEC", "1.0"))
+SPRAY_CONFIDENCE_THRESHOLD = float(os.environ.get("SPRAY_CONFIDENCE_THRESHOLD", "0.80"))
 
 # Classes that should trigger the sprayer (Phase 2+)
 TRIGGER_CLASSES = {"squirrel"}
@@ -420,6 +421,9 @@ def main():
                         triggered = False
                         remaining = COOLDOWN_SEC - (now_mono - last_trigger_time)
                         suppress_reason = f"cooldown {remaining:.0f}s"
+                    elif conf < SPRAY_CONFIDENCE_THRESHOLD:
+                        triggered = False
+                        suppress_reason = f"low confidence ({conf:.0%} < {SPRAY_CONFIDENCE_THRESHOLD:.0%})"
 
                 if triggered:
                     last_trigger_time = time.monotonic()

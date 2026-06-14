@@ -63,6 +63,7 @@ DAY_START          = int(os.environ.get("DAY_START", "7"))   # hour 0–23, incl
 DAY_END            = int(os.environ.get("DAY_END", "20"))    # hour 0–23, exclusive
 SPRAY_DURATION_SEC        = float(os.environ.get("SPRAY_DURATION_SEC", "1.0"))
 SPRAY_CONFIDENCE_THRESHOLD = float(os.environ.get("SPRAY_CONFIDENCE_THRESHOLD", "0.80"))
+SPRAY_ENABLED             = os.environ.get("AUTO_SPRAY_ENABLED", "false").lower() == "true"
 
 # Classes that should trigger the sprayer (Phase 2+)
 TRIGGER_CLASSES = {"squirrel"}
@@ -427,7 +428,11 @@ def main():
 
                 if triggered:
                     last_trigger_time = time.monotonic()
-                    _fire_gpio()
+                    if SPRAY_ENABLED:
+                        _fire_gpio()
+                    else:
+                        suppress_reason = "spray disabled"
+                        triggered = False
 
                 csv_writer.writerow({
                     "timestamp":  ts,

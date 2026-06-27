@@ -16,19 +16,10 @@ Project context for Claude Code. Read this first. Full detail in `docs/`.
 
 - [x] Phase 1 — Detection only (software setup, RTSP stream, inference loop, CSV logging)
 - [x] Phase 2 — GPIO dry run (LED stand-in, cooldown timer, day/night guard)
-- [ ] Phase 3 — Hardware integration (relay, solenoid, water, outdoor enclosure)
+- [x] Phase 3 — Hardware integration (relay, solenoid, water, outdoor enclosure)
 - [ ] Phase 4 — Polish (FastAPI dashboard, nightly AI review, per-class logic, config hardening)
 
-**Currently working on:** Phase 3, Task 4 — water flow test
-
-Phase 3 tasks completed so far:
-- [x] Wire relay module: separate 5V supply, shared ground, GPIO signal line
-- [x] Wire NC solenoid to relay NO/COM terminals and 12V supply
-- [x] Connect solenoid to hose line with Teflon-taped fittings + misting nozzle
-- [ ] Test water flow (use dashboard Hardware Test panel — stop detect.py first)
-- [ ] Set spray duration / confidence threshold
-- [ ] Log first-week triggers
-- [ ] Mount in IP65 enclosure
+**Currently working on:** Phase 4
 
 ---
 

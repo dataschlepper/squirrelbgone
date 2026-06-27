@@ -38,6 +38,7 @@ CORRECTIONS_PATH   = LOG_DIR / "corrections.csv"
 CORRECTION_FIELDS  = ["flagged_at", "detection_timestamp", "class", "confidence", "frame_path"]
 SPRAY_REQUEST_FILE  = LOG_DIR / "spray.request"
 SOLENOID_STATE_FILE = LOG_DIR / "solenoid.state"
+ZONE_FILE           = LOG_DIR / "feeder_zone.json"
 
 app = FastAPI()
 
@@ -177,6 +178,37 @@ def solenoid_off():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     SOLENOID_STATE_FILE.write_text(json.dumps({"on": False}))
     return {"ok": True, "on": False}
+
+
+@app.get("/api/zone")
+def get_zone():
+    try:
+        return json.loads(ZONE_FILE.read_text())
+    except Exception:
+        return {"zone": None}
+
+
+@app.post("/api/zone")
+async def set_zone(req: Request):
+    body = await req.json()
+    zone = {
+        "x1": float(body["x1"]),
+        "y1": float(body["y1"]),
+        "x2": float(body["x2"]),
+        "y2": float(body["y2"]),
+    }
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ZONE_FILE.write_text(json.dumps(zone))
+    return {"ok": True, "zone": zone}
+
+
+@app.delete("/api/zone")
+def delete_zone():
+    try:
+        ZONE_FILE.unlink()
+    except Exception:
+        pass
+    return {"ok": True}
 
 
 @app.get("/api/solenoid-status")
@@ -819,6 +851,31 @@ HTML = """<!DOCTYPE html>
       #cards { grid-template-columns: 1fr 1fr 1fr; }
     }
 
+    /* ── Zone picker ────────────────────────────────────────────────────── */
+    #zone-panel {
+      margin: 12px; padding: 14px 16px;
+      background: #1a1a1a; border-radius: 10px;
+      border: 1px solid #2a2a2a;
+    }
+    #zone-panel h2 { font-size: 0.8rem; color: #777; margin-bottom: 6px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .zone-hint { font-size: 0.78rem; color: #555; margin-bottom: 10px; }
+    .zone-wrap { position: relative; border-radius: 6px; overflow: hidden; width: 100%; }
+    .zone-wrap img { display: block; width: 100%; background: #0a0a0a; min-height: 120px; }
+    #zone-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; }
+    .zone-controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+    #zone-save-btn {
+      padding: 8px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
+      background: #1a3a1a; border: 1px solid #2d6a2d; color: #4ade80; cursor: pointer;
+    }
+    #zone-save-btn:disabled { opacity: 0.4; cursor: default; }
+    #zone-clear-btn {
+      padding: 8px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
+      background: #3a1a1a; border: 1px solid #6a2d2d; color: #f87171; cursor: pointer;
+    }
+    #zone-status { font-size: 0.8rem; color: #555; }
+    #zone-status.ok  { color: #4ade80; }
+    #zone-status.err { color: #ef4444; }
+
     /* ── Hardware test panel ────────────────────────────────────────────── */
     #test-panel {
       margin: 12px; padding: 14px 16px;
@@ -883,6 +940,21 @@ HTML = """<!DOCTYPE html>
   </div>
 
   <div id="summary"></div>
+
+  <!-- Zone config -->
+  <div id="zone-panel">
+    <h2>Feeder Zone</h2>
+    <p class="zone-hint">Click and drag on the live feed to define the feeder area. Only squirrels inside this zone will trigger the sprayer.</p>
+    <div class="zone-wrap">
+      <img id="zone-stream" src="/api/stream" alt="Live feed" onload="onZoneImgLoad()">
+      <canvas id="zone-canvas"></canvas>
+    </div>
+    <div class="zone-controls">
+      <button id="zone-save-btn" onclick="saveZone()" disabled>Save Zone</button>
+      <button id="zone-clear-btn" onclick="clearZone()">Clear Zone</button>
+      <span id="zone-status"></span>
+    </div>
+  </div>
 
   <div id="test-panel">
     <h2>Hardware Test</h2>
@@ -1017,6 +1089,19 @@ HTML = """<!DOCTYPE html>
       const sx = img.clientWidth  / img.naturalWidth;
       const sy = img.clientHeight / img.naturalHeight;
       const ctx = canvas.getContext('2d');
+      // Draw feeder zone first (behind bbox)
+      if (_feederZone) {
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 2]);
+        ctx.strokeRect(
+          _feederZone.x1 * img.naturalWidth  * sx,
+          _feederZone.y1 * img.naturalHeight * sy,
+          (_feederZone.x2 - _feederZone.x1) * img.naturalWidth  * sx,
+          (_feederZone.y2 - _feederZone.y1) * img.naturalHeight * sy,
+        );
+        ctx.setLineDash([]);
+      }
       ctx.strokeStyle = boxColor(img.dataset.cls);
       ctx.lineWidth = 2;
       ctx.strokeRect(x1 * sx, y1 * sy, w * sx, h * sy);
@@ -1153,11 +1238,132 @@ HTML = """<!DOCTYPE html>
         const pct = Math.round(highConfThresh * 100);
         document.getElementById('hc-label').textContent = pct;
       } catch (e) { /* use default */ }
+      await loadFeederZone();
+      initZonePicker();
       load();
     }
 
     init();
     setInterval(load, 30000);
+
+    // ── Zone picker ──────────────────────────────────────────────────────────
+
+    let _feederZone = null;
+    let _zoneStart  = null;
+    let _zoneDraft  = null;
+
+    async function loadFeederZone() {
+      try {
+        const data = await (await fetch('/api/zone')).json();
+        _feederZone = (data && data.x1 !== undefined) ? data : null;
+      } catch {}
+    }
+
+    function onZoneImgLoad() {
+      const canvas = document.getElementById('zone-canvas');
+      const img    = document.getElementById('zone-stream');
+      canvas.width  = img.clientWidth;
+      canvas.height = img.clientHeight;
+      drawZoneCanvas();
+    }
+
+    function drawZoneCanvas() {
+      const canvas = document.getElementById('zone-canvas');
+      const ctx    = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const zone = _zoneDraft || _feederZone;
+      if (!zone) return;
+      const x1 = zone.x1 * canvas.width,  y1 = zone.y1 * canvas.height;
+      const x2 = zone.x2 * canvas.width,  y2 = zone.y2 * canvas.height;
+      ctx.fillStyle   = 'rgba(245, 158, 11, 0.08)';
+      ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth   = 2;
+      ctx.setLineDash([6, 3]);
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#f59e0b';
+      ctx.font      = 'bold 11px system-ui';
+      ctx.fillText('Feeder Zone', x1 + 5, y1 + 15);
+    }
+
+    function _canvasFrac(e, canvas) {
+      const r = canvas.getBoundingClientRect();
+      return {
+        x: Math.max(0, Math.min(1, (e.clientX - r.left)  / r.width)),
+        y: Math.max(0, Math.min(1, (e.clientY - r.top)   / r.height)),
+      };
+    }
+
+    function initZonePicker() {
+      const canvas = document.getElementById('zone-canvas');
+
+      canvas.addEventListener('mousedown', e => {
+        _zoneStart = _canvasFrac(e, canvas);
+        _zoneDraft = null;
+        e.preventDefault();
+      });
+
+      canvas.addEventListener('mousemove', e => {
+        if (!_zoneStart) return;
+        const p = _canvasFrac(e, canvas);
+        _zoneDraft = {
+          x1: Math.min(_zoneStart.x, p.x), y1: Math.min(_zoneStart.y, p.y),
+          x2: Math.max(_zoneStart.x, p.x), y2: Math.max(_zoneStart.y, p.y),
+        };
+        drawZoneCanvas();
+        document.getElementById('zone-save-btn').disabled = false;
+      });
+
+      canvas.addEventListener('mouseup',    () => { _zoneStart = null; });
+      canvas.addEventListener('mouseleave', () => { _zoneStart = null; });
+
+      if (_feederZone) {
+        document.getElementById('zone-status').textContent = 'Zone active';
+        document.getElementById('zone-status').className  = 'ok';
+      }
+      drawZoneCanvas();
+    }
+
+    async function saveZone() {
+      if (!_zoneDraft) return;
+      const btn    = document.getElementById('zone-save-btn');
+      const status = document.getElementById('zone-status');
+      btn.disabled = true;
+      try {
+        const res  = await fetch('/api/zone', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(_zoneDraft),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          _feederZone = _zoneDraft;
+          _zoneDraft  = null;
+          status.textContent = 'Zone saved ✓';
+          status.className   = 'ok';
+        } else {
+          status.textContent = 'Save failed';
+          status.className   = 'err';
+        }
+      } catch {
+        status.textContent = 'Save failed';
+        status.className   = 'err';
+      }
+    }
+
+    async function clearZone() {
+      try {
+        await fetch('/api/zone', { method: 'DELETE' });
+        _feederZone = null;
+        _zoneDraft  = null;
+        drawZoneCanvas();
+        const status = document.getElementById('zone-status');
+        status.textContent = 'Zone cleared';
+        status.className   = '';
+        document.getElementById('zone-save-btn').disabled = true;
+      } catch {}
+    }
 
     // ── Hardware test ────────────────────────────────────────────────────────
 

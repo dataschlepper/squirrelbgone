@@ -7,9 +7,9 @@ Real-time computer vision squirrel deterrent. A Raspberry Pi 5 pulls an RTSP str
 | Phase | Description | Status |
 |---|---|---|
 | 1 | Detection only — software setup, RTSP stream, inference loop, CSV logging | ✅ |
-| 2 | GPIO dry run — LED stand-in, cooldown timer, day/night guard | 🔄 In progress |
-| 3 | Hardware integration — relay, solenoid, water, weatherproof enclosure | — |
-| 4 | Polish — FastAPI dashboard, AI-assisted threshold tuning, per-class logic | — |
+| 2 | GPIO dry run — LED stand-in, cooldown timer, day/night guard | ✅ |
+| 3 | Hardware integration — relay, solenoid, water, weatherproof enclosure | ✅ |
+| 4 | Polish — FastAPI dashboard, AI-assisted threshold tuning, per-class logic | 🔄 In progress |
 
 See [`docs/phases.md`](docs/phases.md) for the full task breakdown.
 

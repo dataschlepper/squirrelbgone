@@ -62,16 +62,43 @@ The project is structured into four incremental phases. Each phase is fully test
 
 ## Phase 4 — Polish
 
-**Goal:** Add a monitoring dashboard, automate threshold tuning via AI frame review, and harden per-class logic.
+**Goal:** Narrow triggers to feeder-only, train a camera-specific model to hit 90%+ precision, and automate ongoing improvement with AI-assisted labeling.
 
-| Task | Type |
-|---|---|
-| Build FastAPI backend: live feed endpoint, detection log, spray history | software |
-| Build simple frontend dashboard with bounding box overlay on live feed | software |
-| Nightly batch script: send flagged frames to Claude/GPT-4V for classification | AI |
-| Parse vision API results into correction log, use to tune thresholds | AI |
-| Per-class trigger logic: spray squirrels, suppress birds/shadows/other | software |
-| Harden day/night schedule, add config file for all tunable params | software |
+### Group A — Zone-based triggering *(immediate fix, independent of model quality)*
+
+| Task | Type | Status |
+|---|---|---|
+| Add feeder zone picker to dashboard (drag to draw rectangle, save coords) | software | — |
+| Persist zone to `logs/feeder_zone.json` (as 0–1 fractions, resolution-independent) | software | — |
+| Update `detect.py` to skip trigger if squirrel center is outside feeder zone; log as `triggered=False` with reason `"outside feeder zone"` | software | — |
+| Show zone overlay on detection cards in dashboard | software | — |
+
+### Group B — AI-assisted pre-labeling script *(unlocks Group C without manual sifting)*
+
+| Task | Type | Status |
+|---|---|---|
+| Write script that sends frames to Claude Vision and returns `squirrel / not-squirrel / uncertain` + explanation | AI | — |
+| Output Roboflow-compatible labels (or CSV mapping frame → verdict) | software | — |
+| Run on existing `frames/` archive to bootstrap training dataset | AI | — |
+| Run nightly on new detections to keep dataset growing | AI | — |
+
+### Group C — Custom model training *(core accuracy fix — target <5% FP in feeder zone)*
+
+| Task | Type | Status |
+|---|---|---|
+| Set up Roboflow dataset, import pre-labeled frames from Group B | software | — |
+| Human review pass — correct AI labels, add bboxes to true positives | manual | — |
+| Fine-tune from existing `squirrelbgone_best.pt` weights (not from scratch) | ML | — |
+| Evaluate: measure precision/recall on held-out set | ML | — |
+| Deploy: swap `MODEL_PATH` in `.env`, monitor first week | software | — |
+
+### Group D — Ongoing iteration loop
+
+| Task | Type | Status |
+|---|---|---|
+| Nightly script flags uncertain detections for human review | AI | — |
+| Monthly retrain cycle as labeled dataset grows | ML | — |
+| Tune `SPRAY_CONFIDENCE_THRESHOLD` based on observed precision per confidence band | manual | — |
 
 **Config file should expose at minimum:**
 - `confidence_threshold` — minimum confidence to trigger spray
@@ -99,3 +126,13 @@ The project is structured into four incremental phases. Each phase is fully test
 | Cooldown timer | Phase 2 | Prevents spray every frame during a single detection event |
 | Day/night schedule | Phase 2 (basic), Phase 4 (hardened) | No triggers at night |
 | Per-class suppression | Phase 4 | Birds, shadows, other non-squirrel classes suppressed |
+
+---
+
+## Backlog
+
+Improvements that were scoped out or deferred. No phase assignment yet.
+
+| Item | Notes |
+|---|---|
+| Real-time bounding box overlay on live feed | Current dashboard draws boxes on saved frames only. Live MJPEG stream has no overlay. Would require detect.py to publish current bbox coords (e.g. via a shared file or memory) so the API thread can composite them onto stream frames before encoding. |

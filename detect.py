@@ -55,6 +55,7 @@ FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", "frames"))
 # Written by api/server.py for dashboard controls
 SPRAY_REQUEST_FILE   = LOG_DIR / "spray.request"
 SOLENOID_STATE_FILE  = LOG_DIR / "solenoid.state"
+ZONE_FILE            = LOG_DIR / "feeder_zone.json"
 
 # Phase 2+: GPIO trigger
 GPIO_PIN           = int(os.environ.get("GPIO_PIN", "17"))
@@ -177,6 +178,45 @@ def _check_spray_request() -> None:
 def _cleanup_gpio() -> None:
     """Ensure valve is closed on exit — safe to call even if GPIO never initialised."""
     _gpio_release()
+
+# ─── FEEDER ZONE ──────────────────────────────────────────────────────────────
+#
+# Zone is stored as fractions (0–1) so it's resolution-independent.
+# Reloaded whenever the file changes (set via dashboard zone picker).
+
+_feeder_zone: dict | None = None
+_feeder_zone_mtime: float = 0.0
+
+
+def _reload_zone_if_changed() -> None:
+    global _feeder_zone, _feeder_zone_mtime
+    try:
+        mtime = ZONE_FILE.stat().st_mtime
+        if mtime != _feeder_zone_mtime:
+            _feeder_zone = json.loads(ZONE_FILE.read_text())
+            _feeder_zone_mtime = mtime
+            log.info(f"Feeder zone loaded: {_feeder_zone}")
+    except FileNotFoundError:
+        if _feeder_zone is not None:
+            log.info("Feeder zone cleared.")
+        _feeder_zone = None
+        _feeder_zone_mtime = 0.0
+    except Exception:
+        pass
+
+
+def _in_feeder_zone(x1: int, y1: int, x2: int, y2: int, frame_w: int, frame_h: int) -> bool:
+    """Returns True if the bbox center falls inside the configured feeder zone.
+    Returns True unconditionally when no zone is set (trigger everywhere)."""
+    if not _feeder_zone:
+        return True
+    cx = (x1 + x2) / 2
+    cy = (y1 + y2) / 2
+    return (
+        _feeder_zone["x1"] * frame_w <= cx <= _feeder_zone["x2"] * frame_w
+        and _feeder_zone["y1"] * frame_h <= cy <= _feeder_zone["y2"] * frame_h
+    )
+
 
 # ─── SHUTDOWN ─────────────────────────────────────────────────────────────────
 
@@ -318,6 +358,7 @@ def main():
         while _running:
             now = time.monotonic()
 
+            _reload_zone_if_changed()
             _check_spray_request()
 
             if cap is None:
@@ -381,6 +422,7 @@ def main():
 
             frame_has_bird     = len(bird_boxes) > 0
             frame_has_wildlife = len(wildlife_boxes) > 0
+            frame_h, frame_w   = frame.shape[:2]
             ts = datetime.datetime.now().isoformat(timespec="seconds")
 
             # Save one frame per inference pass; name by dominant class
@@ -413,6 +455,9 @@ def main():
                         )
                     else:
                         suppress_reason = "bird present"
+                elif not _in_feeder_zone(x1, y1, x2, y2, frame_w, frame_h):
+                    triggered = False
+                    suppress_reason = "outside feeder zone"
                 else:
                     now_mono = time.monotonic()
                     if not (DAY_START <= datetime.datetime.now().hour < DAY_END):

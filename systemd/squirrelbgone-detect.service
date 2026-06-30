@@ -1,0 +1,16 @@
+[Unit]
+Description=SquirrelBGone Detection Loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=squirrelpi
+WorkingDirectory=/home/squirrelpi/squirrelbgone
+ExecStart=/home/squirrelpi/squirrelbgone/sbg-env/bin/python detect.py
+Restart=on-failure
+RestartSec=10
+SyslogIdentifier=squirrelbgone-detect
+
+[Install]
+WantedBy=multi-user.target

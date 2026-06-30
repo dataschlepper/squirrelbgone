@@ -49,8 +49,9 @@ MODEL_PATH_WILDLIFE          = os.environ.get("MODEL_PATH_WILDLIFE", "")
 WILDLIFE_CONFIDENCE_THRESHOLD = float(os.environ.get("WILDLIFE_CONFIDENCE_THRESHOLD", "0.45"))
 
 # Where to write logs and saved frames
-LOG_DIR    = Path(os.environ.get("LOG_DIR", "logs"))
-FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", "frames"))
+LOG_DIR         = Path(os.environ.get("LOG_DIR",    "logs"))
+FRAMES_DIR      = Path(os.environ.get("FRAMES_DIR", "frames"))
+FRAMES_KEEP_DAYS = int(os.environ.get("FRAMES_KEEP_DAYS", "7"))
 
 # Written by api/server.py for dashboard controls
 SPRAY_REQUEST_FILE   = LOG_DIR / "spray.request"
@@ -78,6 +79,22 @@ WILDLIFE_SUPPRESS_CLASSES = {
     "fox", "raccoon", "rabbit", "hog", "boar",
     "bear", "coyote", "skunk", "opossum", "groundhog", "turkey",
 }
+
+# ─── FRAME CLEANUP ────────────────────────────────────────────────────────────
+
+def _cleanup_old_frames() -> None:
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=FRAMES_KEEP_DAYS)
+    deleted = 0
+    for f in FRAMES_DIR.glob("*.jpg"):
+        try:
+            if datetime.datetime.fromtimestamp(f.stat().st_mtime) < cutoff:
+                f.unlink()
+                deleted += 1
+        except Exception:
+            pass
+    if deleted:
+        log.info(f"Cleanup: removed {deleted} frames older than {FRAMES_KEEP_DAYS}d.")
+
 
 # ─── LOGGING ──────────────────────────────────────────────────────────────────
 
@@ -301,6 +318,7 @@ def main():
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+    _cleanup_old_frames()
 
     from ultralytics import YOLO
 
@@ -385,6 +403,7 @@ def main():
                 csv_fh.close()
                 csv_fh, csv_writer = open_csv(LOG_DIR)
                 current_date = today
+                _cleanup_old_frames()
 
             # ── Inference ────────────────────────────────────────────────────
             squirrel_results = squirrel_model(frame, verbose=False)[0]

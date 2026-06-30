@@ -17,10 +17,10 @@ See [`docs/phases.md`](docs/phases.md) for the full task breakdown.
 
 1. Reolink RLC-811A camera streams RTSP video over the local network
 2. Raspberry Pi 5 pulls the stream and runs YOLOv8 inference locally via ultralytics
-3. Squirrel detections above the confidence threshold are logged with saved frames
+3. Squirrel detections above the confidence threshold are evaluated against a configurable feeder zone — only squirrels on the feeder trigger the sprayer
 4. Optional suppression models (bird, wildlife) prevent false triggers from non-targets
-5. A FastAPI dashboard on the Pi lets you review detections and flag false positives from your phone
-6. Phase 2+: a GPIO pin fires a relay → opens a 12V solenoid valve → water spray
+5. A FastAPI dashboard on the Pi lets you review detections, define the feeder zone, and manually test the sprayer from your phone
+6. A GPIO pin fires a relay → opens a 12V solenoid valve → water spray
 
 ## Software stack
 
@@ -36,13 +36,14 @@ See [`docs/phases.md`](docs/phases.md) for the full task breakdown.
 
 ```
 squirrelbgone/
-├── detect.py            # Inference loop, CSV logging
+├── detect.py            # Inference loop, GPIO, CSV logging
 ├── .env.example         # Config template (copy to .env)
 ├── models/              # YOLOv8 .pt weight files
 ├── api/
-│   └── server.py        # FastAPI dashboard
-├── logs/                # Daily detection CSVs
-├── frames/              # Saved JPEG frames
+│   └── server.py        # FastAPI dashboard + MJPEG stream
+├── systemd/             # systemd service units (auto-start on boot)
+├── logs/                # Daily detection CSVs + runtime state files
+├── frames/              # Saved JPEG frames (auto-purged per FRAMES_KEEP_DAYS)
 └── docs/
     ├── hardware.md       # Wiring, components, key design decisions
     ├── network.md        # Topology, RTSP setup, PoE notes

@@ -68,10 +68,10 @@ The project is structured into four incremental phases. Each phase is fully test
 
 | Task | Type | Status |
 |---|---|---|
-| Add feeder zone picker to dashboard (drag to draw rectangle, save coords) | software | — |
-| Persist zone to `logs/feeder_zone.json` (as 0–1 fractions, resolution-independent) | software | — |
-| Update `detect.py` to skip trigger if squirrel center is outside feeder zone; log as `triggered=False` with reason `"outside feeder zone"` | software | — |
-| Show zone overlay on detection cards in dashboard | software | — |
+| Add feeder zone picker to dashboard (drag to draw rectangle, save coords) | software | ✅ |
+| Persist zone to `logs/feeder_zone.json` (as 0–1 fractions, resolution-independent) | software | ✅ |
+| Update `detect.py` to skip trigger if squirrel center is outside feeder zone; log as `triggered=False` with reason `"outside feeder zone"` | software | ✅ |
+| Show zone overlay on detection cards in dashboard | software | ✅ |
 
 ### Group B — AI-assisted pre-labeling script *(unlocks Group C without manual sifting)*
 

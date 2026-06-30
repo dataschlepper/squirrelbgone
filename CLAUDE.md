@@ -19,7 +19,10 @@ Project context for Claude Code. Read this first. Full detail in `docs/`.
 - [x] Phase 3 — Hardware integration (relay, solenoid, water, outdoor enclosure)
 - [ ] Phase 4 — Polish (FastAPI dashboard, nightly AI review, per-class logic, config hardening)
 
-**Currently working on:** Phase 4
+**Currently working on:** Phase 4, Group B — AI-assisted pre-labeling script
+
+Phase 4 Groups completed so far:
+- [x] Group A — Zone-based triggering (feeder zone picker, detect.py zone check, zone overlay on dashboard, systemd services)
 
 ---
 

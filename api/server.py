@@ -40,6 +40,10 @@ SPRAY_REQUEST_FILE  = LOG_DIR / "spray.request"
 SOLENOID_STATE_FILE = LOG_DIR / "solenoid.state"
 ZONE_FILE           = LOG_DIR / "feeder_zone.json"
 
+FRAMES_KEEP_DAYS = int(os.environ.get("FRAMES_KEEP_DAYS", "7"))
+LABELS_PATH      = LOG_DIR / "labels.csv"
+LABEL_FIELDS     = ["labeled_at", "frame_path", "label", "predicted_class", "confidence"]
+
 app = FastAPI()
 
 # ── MJPEG live stream ─────────────────────────────────────────────────────────
@@ -122,6 +126,48 @@ def _read_recent(minutes: int) -> list[dict]:
 
     rows.sort(key=lambda r: r["timestamp"], reverse=True)
     return rows
+
+
+def _build_detection_index() -> dict:
+    """Returns {frame_basename: best_detection_row} across the retention window."""
+    index: dict = {}
+    today = datetime.date.today()
+    for offset in range(FRAMES_KEEP_DAYS + 1):
+        csv_path = LOG_DIR / f"detections_{(today - datetime.timedelta(days=offset)).isoformat()}.csv"
+        if not csv_path.exists():
+            continue
+        try:
+            with open(csv_path, newline="") as f:
+                for row in csv.DictReader(f):
+                    name = Path(row.get("frame_path", "")).name
+                    if not name:
+                        continue
+                    if name not in index:
+                        index[name] = row
+                    else:
+                        # Prefer row whose class matches the filename suffix
+                        suffix = name.rsplit("_", 1)[-1].replace(".jpg", "")
+                        if row.get("class", "").lower() == suffix.lower():
+                            index[name] = row
+        except Exception:
+            pass
+    return index
+
+
+def _read_labeled_set() -> set:
+    """Returns set of frame basenames that have already been labeled."""
+    labeled: set = set()
+    if not LABELS_PATH.exists():
+        return labeled
+    try:
+        with open(LABELS_PATH, newline="") as f:
+            for row in csv.DictReader(f):
+                fp = row.get("frame_path", "")
+                if fp:
+                    labeled.add(Path(fp).name)
+    except Exception:
+        pass
+    return labeled
 
 
 @app.get("/api/config")
@@ -220,6 +266,53 @@ def solenoid_status():
         return {"on": False}
 
 
+@app.get("/api/frames/pending")
+def get_pending_frames():
+    labeled  = _read_labeled_set()
+    det_idx  = _build_detection_index()
+    frames = []
+    for f in sorted(FRAMES_DIR.glob("*.jpg"), reverse=True):
+        if f.name in labeled:
+            continue
+        row = det_idx.get(f.name, {})
+        frames.append({
+            "frame_path":      f"frames/{f.name}",
+            "image_url":       f"/frames/{f.name}",
+            "filename":        f.name,
+            "predicted_class": row.get("class", ""),
+            "confidence":      row.get("confidence", ""),
+            "x1": row.get("x1", ""), "y1": row.get("y1", ""),
+            "w":  row.get("w",  ""), "h":  row.get("h",  ""),
+            "timestamp":       row.get("timestamp", ""),
+        })
+    return {"count": len(frames), "frames": frames}
+
+
+@app.post("/api/frames/label")
+async def label_frame(req: Request):
+    body  = await req.json()
+    fp    = body.get("frame_path", "").strip()
+    label = body.get("label", "").strip()
+    if not fp:
+        return {"ok": False, "error": "frame_path required"}
+    if label not in ("squirrel", "not_squirrel"):
+        return {"ok": False, "error": "label must be 'squirrel' or 'not_squirrel'"}
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    is_new = not LABELS_PATH.exists()
+    with open(LABELS_PATH, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=LABEL_FIELDS)
+        if is_new:
+            writer.writeheader()
+        writer.writerow({
+            "labeled_at":      datetime.datetime.now().isoformat(timespec="seconds"),
+            "frame_path":      fp,
+            "label":           label,
+            "predicted_class": body.get("predicted_class", ""),
+            "confidence":      body.get("confidence", ""),
+        })
+    return {"ok": True}
+
+
 HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -287,6 +380,17 @@ HTML = """<!DOCTYPE html>
       min-height: 38px; align-self: center;
     }
     #refresh-btn:active { background: rgba(255,255,255,0.28); }
+    .nav-link {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: rgba(255,255,255,0.9); padding: 8px 14px; border-radius: 20px;
+      font-family: 'Nunito', sans-serif;
+      font-size: 0.78rem; font-weight: 700;
+      text-decoration: none; white-space: nowrap;
+      min-height: 38px; align-self: center;
+      display: inline-flex; align-items: center;
+    }
+    .nav-link:active { background: rgba(255,255,255,0.28); }
 
     /* ── Layout ──────────────────────────────────────────────────────────── */
     #layout {
@@ -587,7 +691,7 @@ HTML = """<!DOCTYPE html>
 <body>
 
 <header>
-  <div style="width:90px"></div>
+  <a href="/review" class="nav-link">🏷️ Label</a>
   <div class="header-title">
     <h1>🐿️ SquirrelBGone 💦</h1>
     <p class="tagline">Spray First · Ask Questions Never</p>
@@ -1211,3 +1315,323 @@ def index():
 @app.get("/mobile", response_class=HTMLResponse)
 def mobile():
     return RedirectResponse(url="/")
+
+
+REVIEW_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Label Frames — SquirrelBGone</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Nunito:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --pool:   #00B4D8;
+      --sky:    #90E0EF;
+      --deep:   #0077B6;
+      --pink:   #FF006E;
+      --yellow: #FFD166;
+      --mint:   #06D6A0;
+      --navy:   #023E8A;
+      --glass:  rgba(255,255,255,0.85);
+    }
+
+    body {
+      font-family: 'Nunito', sans-serif;
+      background: linear-gradient(160deg, #CAF0F8 0%, #90E0EF 40%, #48CAE4 70%, #00B4D8 100%);
+      min-height: 100vh;
+      color: var(--navy);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    header {
+      background: linear-gradient(135deg, #023E8A 0%, #0077B6 60%, #00B4D8 100%);
+      padding: 14px 20px 28px;
+      box-shadow: 0 4px 20px rgba(0,60,120,0.35);
+      clip-path: ellipse(100% 100% at 50% 0%);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .header-title { text-align: center; flex: 1; }
+    h1 {
+      font-family: 'Pacifico', cursive;
+      font-size: clamp(1.4rem, 4vw, 2rem);
+      color: var(--yellow);
+      text-shadow: 3px 3px 0 rgba(0,0,0,0.25), 0 0 30px rgba(255,209,102,0.4);
+    }
+    .tagline {
+      font-size: 0.68rem; color: var(--sky);
+      font-weight: 900; text-transform: uppercase;
+      letter-spacing: 3px; margin-top: 3px;
+    }
+    #counter {
+      font-size: 0.75rem; color: var(--sky);
+      font-weight: 700; margin-top: 4px;
+    }
+    .nav-back {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: rgba(255,255,255,0.9); padding: 8px 14px; border-radius: 20px;
+      font-family: 'Nunito', sans-serif;
+      font-size: 0.78rem; font-weight: 700;
+      text-decoration: none; white-space: nowrap;
+      min-height: 38px; align-self: center;
+      display: inline-flex; align-items: center;
+    }
+    .nav-back:active { background: rgba(255,255,255,0.28); }
+
+    /* ── Grid ────────────────────────────────────────────────────────────── */
+    #frames-grid {
+      max-width: 1200px; margin: 0 auto;
+      padding: 20px 14px 48px;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+    @media (min-width: 600px)  { #frames-grid { grid-template-columns: 1fr 1fr; } }
+    @media (min-width: 1000px) { #frames-grid { grid-template-columns: 1fr 1fr 1fr; } }
+
+    /* ── Review card ─────────────────────────────────────────────────────── */
+    .review-card {
+      background: var(--glass);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 4px 16px rgba(0,100,160,0.10);
+      border-left: 4px solid rgba(0,119,182,0.18);
+    }
+    .review-card.squirrel { border-left-color: #f59e0b; }
+
+    /* ── Image + bbox canvas ─────────────────────────────────────────────── */
+    .img-wrap {
+      position: relative; line-height: 0;
+      background: #d0eaf5;
+    }
+    .img-wrap img {
+      width: 100%; display: block;
+      border-radius: 0;
+    }
+    .bbox-canvas {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+
+    /* ── Card meta row ───────────────────────────────────────────────────── */
+    .card-meta {
+      display: flex; align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px 4px;
+      gap: 8px;
+    }
+    .cls {
+      font-size: 0.72rem; font-weight: 900;
+      text-transform: uppercase; letter-spacing: 1px;
+      padding: 3px 9px; border-radius: 30px;
+      background: rgba(0,119,182,0.12); color: var(--deep);
+    }
+    .cls.squirrel { background: rgba(245,158,11,0.15); color: #b45309; }
+    .cls.bird     { background: rgba(59,130,246,0.12); color: #1d4ed8; }
+    .conf {
+      font-size: 0.78rem; font-weight: 900;
+      color: var(--deep);
+    }
+    .ts {
+      font-size: 0.65rem; color: #888;
+      padding: 0 12px 6px; font-weight: 700;
+    }
+
+    /* ── Label buttons ───────────────────────────────────────────────────── */
+    .label-btns {
+      display: flex; gap: 8px; padding: 8px 12px 12px;
+    }
+    .label-btn {
+      flex: 1; padding: 10px 8px;
+      border-radius: 12px; border: none;
+      font-family: 'Nunito', sans-serif; font-size: 0.85rem; font-weight: 900;
+      cursor: pointer; min-height: 44px;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .label-btn:active { transform: scale(0.96); }
+    .squirrel-btn {
+      background: linear-gradient(135deg, #d97706, #f59e0b); color: white;
+    }
+    .not-btn {
+      background: linear-gradient(135deg, #15803d, #22c55e); color: white;
+    }
+    .label-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    /* ── Exit animation ──────────────────────────────────────────────────── */
+    @keyframes card-exit {
+      0%   { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(0.85); }
+    }
+    .card-exiting {
+      animation: card-exit 0.25s ease-in forwards;
+      pointer-events: none;
+    }
+
+    /* ── Empty state ─────────────────────────────────────────────────────── */
+    #empty-state {
+      grid-column: 1 / -1;
+      text-align: center; padding: 80px 20px;
+      font-size: 1.1rem; font-weight: 700; color: #888;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <a href="/" class="nav-back">← Dashboard</a>
+  <div class="header-title">
+    <h1>🏷️ Label Frames</h1>
+    <p class="tagline">Build the training dataset</p>
+    <p id="counter"></p>
+  </div>
+  <div style="width:90px"></div>
+</header>
+
+<div id="frames-grid"></div>
+
+<script>
+  let pendingCount = 0;
+
+  const BOX_COLORS = { squirrel: '#f59e0b', bird: '#3b82f6', wildlife: '#10b981' };
+  function boxColor(cls) { return BOX_COLORS[cls] || '#64748b'; }
+
+  function drawCardBox(img) {
+    const x1 = +img.dataset.x1, y1 = +img.dataset.y1;
+    const w  = +img.dataset.w,  h  = +img.dataset.h;
+    if (!w || !h) return;
+    const canvas = img.nextElementSibling;
+    canvas.width  = img.clientWidth;
+    canvas.height = img.clientHeight;
+    const sx = img.clientWidth  / img.naturalWidth;
+    const sy = img.clientHeight / img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = boxColor(img.dataset.cls);
+    ctx.lineWidth = 2.5;
+    ctx.strokeRect(x1 * sx, y1 * sy, w * sx, h * sy);
+  }
+
+  async function labelFrame(card, framePath, label, predictedClass, confidence) {
+    card.querySelectorAll('.label-btn').forEach(b => b.disabled = true);
+    try {
+      const res = await fetch('/api/frames/label', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          frame_path:      framePath,
+          label:           label,
+          predicted_class: predictedClass,
+          confidence:      confidence,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        pendingCount--;
+        updateCounter();
+        card.classList.add('card-exiting');
+        card.addEventListener('animationend', () => {
+          card.remove();
+          if (pendingCount === 0) showEmptyState();
+        }, { once: true });
+      } else {
+        card.querySelectorAll('.label-btn').forEach(b => b.disabled = false);
+      }
+    } catch {
+      card.querySelectorAll('.label-btn').forEach(b => b.disabled = false);
+    }
+  }
+
+  function ago(isoStr) {
+    if (!isoStr) return '';
+    const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+    if (diff < 60)   return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }
+
+  function makeCard(f) {
+    const cls  = (f.predicted_class || '').toLowerCase();
+    const conf = f.confidence ? Math.round(parseFloat(f.confidence) * 100) + '%' : '—';
+    const clsCss = cls || 'unknown';
+
+    const card = document.createElement('div');
+    card.className = 'review-card' + (cls === 'squirrel' ? ' squirrel' : '');
+
+    card.innerHTML =
+      '<div class="img-wrap">' +
+        '<img src="' + f.image_url + '" alt="' + (cls || 'frame') + '" loading="lazy"' +
+             ' data-x1="' + (f.x1 || 0) + '" data-y1="' + (f.y1 || 0) + '"' +
+             ' data-w="'  + (f.w  || 0) + '" data-h="'  + (f.h  || 0) + '"' +
+             ' data-cls="' + cls + '" onload="drawCardBox(this)">' +
+        '<canvas class="bbox-canvas"></canvas>' +
+      '</div>' +
+      '<div class="card-meta">' +
+        '<span class="cls ' + clsCss + '">' + (cls || 'unknown') + '</span>' +
+        '<span class="conf">' + conf + '</span>' +
+      '</div>' +
+      '<div class="ts">' + ago(f.timestamp) + (f.timestamp ? ' · ' + f.timestamp : '') + '</div>' +
+      '<div class="label-btns">' +
+        '<button class="label-btn squirrel-btn">🐿️ Squirrel</button>' +
+        '<button class="label-btn not-btn">✓ Not Squirrel</button>' +
+      '</div>';
+
+    const [sqBtn, notBtn] = card.querySelectorAll('.label-btn');
+    sqBtn.addEventListener('click', () =>
+      labelFrame(card, f.frame_path, 'squirrel', f.predicted_class, f.confidence));
+    notBtn.addEventListener('click', () =>
+      labelFrame(card, f.frame_path, 'not_squirrel', f.predicted_class, f.confidence));
+
+    return card;
+  }
+
+  function updateCounter() {
+    document.getElementById('counter').textContent =
+      pendingCount === 0
+        ? 'All done!'
+        : pendingCount + ' frame' + (pendingCount !== 1 ? 's' : '') + ' pending review';
+  }
+
+  function showEmptyState() {
+    document.getElementById('frames-grid').innerHTML =
+      '<div id="empty-state">🎉 All frames labeled! Great work.</div>';
+  }
+
+  async function init() {
+    let data;
+    try {
+      data = await (await fetch('/api/frames/pending')).json();
+    } catch {
+      document.getElementById('frames-grid').innerHTML =
+        '<div id="empty-state">Could not load frames — is the server running?</div>';
+      return;
+    }
+    pendingCount = data.count;
+    updateCounter();
+    if (data.count === 0) {
+      showEmptyState();
+      return;
+    }
+    const grid = document.getElementById('frames-grid');
+    data.frames.forEach(f => grid.appendChild(makeCard(f)));
+  }
+
+  init();
+</script>
+</body>
+</html>"""
+
+
+@app.get("/review", response_class=HTMLResponse)
+def review():
+    return REVIEW_HTML

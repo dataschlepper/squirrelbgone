@@ -21,7 +21,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
@@ -220,11 +220,11 @@ def solenoid_status():
         return {"on": False}
 
 
-MOBILE_HTML = """<!DOCTYPE html>
+HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <title>SquirrelBGone 💦</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Nunito:wght@400;700;900&display=swap" rel="stylesheet">
@@ -236,11 +236,10 @@ MOBILE_HTML = """<!DOCTYPE html>
       --sky:    #90E0EF;
       --deep:   #0077B6;
       --pink:   #FF006E;
-      --coral:  #FF6B6B;
       --yellow: #FFD166;
       --mint:   #06D6A0;
-      --cream:  #FFF9F0;
       --navy:   #023E8A;
+      --glass:  rgba(255,255,255,0.85);
     }
 
     body {
@@ -254,80 +253,124 @@ MOBILE_HTML = """<!DOCTYPE html>
     /* ── Header ─────────────────────────────────────────────────────────── */
     header {
       background: linear-gradient(135deg, #023E8A 0%, #0077B6 60%, #00B4D8 100%);
-      padding: 18px 20px 22px;
-      text-align: center;
+      padding: 14px 20px 28px;
       box-shadow: 0 4px 20px rgba(0,60,120,0.35);
       clip-path: ellipse(100% 100% at 50% 0%);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
     }
+    .header-title { text-align: center; flex: 1; }
     h1 {
       font-family: 'Pacifico', cursive;
-      font-size: 2.2rem;
+      font-size: clamp(1.6rem, 5vw, 2.4rem);
       color: var(--yellow);
       text-shadow: 3px 3px 0 rgba(0,0,0,0.25), 0 0 30px rgba(255,209,102,0.4);
     }
     .tagline {
-      font-size: 0.72rem;
-      color: var(--sky);
-      font-weight: 900;
-      text-transform: uppercase;
-      letter-spacing: 3px;
-      margin-top: 4px;
+      font-size: 0.68rem; color: var(--sky);
+      font-weight: 900; text-transform: uppercase;
+      letter-spacing: 3px; margin-top: 3px;
     }
+    #meta {
+      font-size: 0.68rem; color: rgba(144,224,239,0.7);
+      font-weight: 700; margin-top: 3px;
+    }
+    #refresh-btn {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white; padding: 8px 14px; border-radius: 20px;
+      font-family: 'Nunito', sans-serif;
+      font-size: 0.78rem; font-weight: 700;
+      cursor: pointer; white-space: nowrap;
+      min-height: 38px; align-self: center;
+    }
+    #refresh-btn:active { background: rgba(255,255,255,0.28); }
 
-    /* ── Main ───────────────────────────────────────────────────────────── */
-    main {
-      max-width: 480px;
+    /* ── Layout ──────────────────────────────────────────────────────────── */
+    #layout {
+      max-width: 1440px;
       margin: 0 auto;
-      padding: 16px 14px 48px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
+      padding-bottom: 40px;
     }
 
-    /* ── Card ───────────────────────────────────────────────────────────── */
+    @media (min-width: 1100px) {
+      #layout {
+        display: grid;
+        grid-template-columns: 390px 1fr;
+        align-items: start;
+      }
+      #sidebar {
+        position: sticky;
+        top: 16px;
+        max-height: calc(100vh - 32px);
+        overflow-y: auto;
+      }
+    }
+
+    /* ── Glass card ──────────────────────────────────────────────────────── */
     .card {
-      background: rgba(255, 255, 255, 0.88);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
+      background: var(--glass);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
       border-radius: 22px;
-      box-shadow: 0 4px 24px rgba(0, 100, 160, 0.13), 0 1px 4px rgba(0,0,0,0.06);
+      box-shadow: 0 4px 24px rgba(0,100,160,0.13), 0 1px 4px rgba(0,0,0,0.06);
       overflow: hidden;
+      margin: 12px 14px;
     }
-    .card-inner { padding: 16px; }
-
-    /* ── Live cam ───────────────────────────────────────────────────────── */
-    .cam-header {
-      padding: 10px 16px 8px;
+    .card-head {
+      padding: 10px 16px 9px;
       display: flex; align-items: center; gap: 8px;
-      background: rgba(255,255,255,0.6);
-      border-bottom: 1px solid rgba(0,180,216,0.2);
+      border-bottom: 1px solid rgba(0,180,216,0.18);
+      font-size: 0.7rem; font-weight: 900;
+      text-transform: uppercase; letter-spacing: 2px; color: #888;
     }
+    .card-body { padding: 16px; }
+
+    /* ── Live stream + zone picker (combined) ────────────────────────────── */
     .live-dot {
-      width: 10px; height: 10px; border-radius: 50%;
-      background: #22c55e;
-      box-shadow: 0 0 8px #22c55e;
+      width: 9px; height: 9px; border-radius: 50%;
+      background: #22c55e; box-shadow: 0 0 7px #22c55e;
       animation: blink 1.4s ease-in-out infinite;
+      flex-shrink: 0;
     }
-    .live-label { font-weight: 900; font-size: 0.8rem; color: #16a34a; letter-spacing: 2px; }
-    #stream-img {
-      width: 100%; display: block;
-      background: #0a0a1a;
-      min-height: 200px;
-      object-fit: contain;
-    }
-    .no-stream {
-      min-height: 200px;
-      display: none;
-      flex-direction: column;
-      align-items: center; justify-content: center;
-      background: #0a0a1a;
-      color: #555; gap: 8px;
+    .live-label { color: #16a34a; letter-spacing: 2px; }
+
+    #stream-wrap { position: relative; background: #0a0a1a; }
+    #stream-img  { width: 100%; display: block; object-fit: contain; min-height: 180px; }
+    #no-stream   {
+      display: none; min-height: 180px;
+      flex-direction: column; align-items: center; justify-content: center;
+      background: #0a0a1a; color: #555; gap: 8px;
       font-size: 0.85rem; font-weight: 700;
     }
-    .no-stream-icon { font-size: 3rem; }
+    #zone-canvas {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
+      cursor: crosshair;
+    }
 
-    /* ── Stats ──────────────────────────────────────────────────────────── */
-    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px; }
+    .zone-controls {
+      padding: 10px 14px 12px;
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      border-top: 1px solid rgba(0,180,216,0.18);
+    }
+    .zone-hint { font-size: 0.72rem; color: #888; font-weight: 700; font-style: italic; flex: 1; min-width: 100px; }
+    #zone-save-btn, #zone-clear-btn {
+      padding: 7px 16px; border-radius: 12px; border: none;
+      font-family: 'Nunito', sans-serif; font-size: 0.82rem; font-weight: 900;
+      cursor: pointer; min-height: 36px;
+    }
+    #zone-save-btn  { background: linear-gradient(135deg, #15803d, #22c55e); color: white; }
+    #zone-save-btn:disabled { opacity: 0.4; cursor: default; }
+    #zone-clear-btn { background: linear-gradient(135deg, #9f1239, #f43f5e); color: white; }
+    #zone-status { font-size: 0.78rem; font-weight: 700; color: #aaa; }
+    #zone-status.ok  { color: #16a34a; }
+    #zone-status.err { color: #dc2626; }
+
+    /* ── Stats ───────────────────────────────────────────────────────────── */
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .stat {
       background: linear-gradient(145deg, var(--deep), var(--pool));
       border-radius: 16px; padding: 14px 10px;
@@ -336,39 +379,36 @@ MOBILE_HTML = """<!DOCTYPE html>
     .stat-num {
       font-family: 'Pacifico', cursive;
       font-size: 2.2rem; color: var(--yellow);
-      line-height: 1;
-      text-shadow: 2px 2px 0 rgba(0,0,0,0.2);
+      line-height: 1; text-shadow: 2px 2px 0 rgba(0,0,0,0.2);
     }
-    .stat-label { font-size: 0.7rem; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; opacity: 0.88; margin-top: 5px; }
+    .stat-label {
+      font-size: 0.68rem; font-weight: 900;
+      text-transform: uppercase; letter-spacing: 1px;
+      opacity: 0.88; margin-top: 5px;
+    }
 
-    /* ── Blast button ───────────────────────────────────────────────────── */
-    .blast-card .card-inner { text-align: center; padding: 20px 16px 22px; }
+    /* ── Blast button ────────────────────────────────────────────────────── */
+    .blast-wrap { text-align: center; }
     .section-title {
       font-family: 'Pacifico', cursive;
-      font-size: 1.05rem; color: var(--navy);
-      margin-bottom: 18px;
+      font-size: 1.05rem; color: var(--navy); margin-bottom: 16px;
     }
-
     #blast-btn {
-      width: 190px; height: 190px;
-      border-radius: 50%; border: none;
+      width: 160px; height: 160px; border-radius: 50%; border: none;
       background: linear-gradient(145deg, #FF6B6B, #FF006E);
-      color: white;
-      font-family: 'Nunito', sans-serif;
-      font-weight: 900; font-size: 1.25rem;
+      color: white; font-family: 'Nunito', sans-serif; font-weight: 900;
       cursor: pointer;
       box-shadow: 0 8px 0 #990042, 0 14px 28px rgba(255,0,110,0.45);
       transform: translateY(0);
       transition: transform 0.08s, box-shadow 0.08s;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 2px;
-      margin: 0 auto 18px;
+      margin: 0 auto 16px;
       position: relative; overflow: hidden;
       -webkit-tap-highlight-color: transparent;
     }
-    #blast-btn .btn-emoji { font-size: 3rem; line-height: 1; }
-    #blast-btn .btn-text  { font-size: 1.1rem; letter-spacing: 1px; }
-
+    #blast-btn .btn-emoji { font-size: 2.6rem; line-height: 1; }
+    #blast-btn .btn-text  { font-size: 0.95rem; letter-spacing: 1px; }
     #blast-btn:active:not(:disabled) {
       transform: translateY(6px);
       box-shadow: 0 2px 0 #990042, 0 4px 12px rgba(255,0,110,0.35);
@@ -377,73 +417,56 @@ MOBILE_HTML = """<!DOCTYPE html>
       background: linear-gradient(145deg, #bbb, #999);
       box-shadow: 0 6px 0 #666, 0 10px 18px rgba(0,0,0,0.18);
       cursor: not-allowed;
+      animation: none;
     }
-    #blast-btn:not(:disabled) {
-      animation: idle-pulse 2.4s ease-in-out infinite;
-    }
+    #blast-btn:not(:disabled) { animation: idle-pulse 2.4s ease-in-out infinite; }
     @keyframes idle-pulse {
       0%, 100% { box-shadow: 0 8px 0 #990042, 0 14px 28px rgba(255,0,110,0.45); }
-      50%       { box-shadow: 0 8px 0 #990042, 0 18px 42px rgba(255,0,110,0.7); }
+      50%       { box-shadow: 0 8px 0 #990042, 0 18px 42px rgba(255,0,110,0.7);  }
     }
-
-    /* water drop spawn animation */
     @keyframes drop-up {
-      0%   { transform: translateY(0)    scale(1);   opacity: 1; }
+      0%   { transform: translateY(0) scale(1);    opacity: 1; }
       100% { transform: translateY(-90px) scale(0.4); opacity: 0; }
     }
     .drop {
       position: absolute; pointer-events: none;
-      font-size: 1.6rem;
-      animation: drop-up 0.75s ease-out forwards;
+      font-size: 1.6rem; animation: drop-up 0.75s ease-out forwards;
     }
-
-    /* ── Duration row ───────────────────────────────────────────────────── */
     .dur-row {
       display: flex; align-items: center; justify-content: center;
-      gap: 10px; margin-bottom: 14px;
+      gap: 10px; margin-bottom: 12px;
     }
     .dur-label { font-weight: 900; color: var(--navy); font-size: 0.85rem; }
     #dur-input {
-      width: 80px; padding: 8px 10px;
+      width: 76px; padding: 8px 10px;
       border: 3px solid var(--pool); border-radius: 12px;
       font-family: 'Nunito', sans-serif; font-size: 0.95rem; font-weight: 700;
       color: var(--navy); text-align: center; background: white; outline: none;
     }
     #dur-input:focus { border-color: var(--deep); }
-
-    /* ── Status ─────────────────────────────────────────────────────────── */
     #blast-status {
-      min-height: 1.5em;
-      font-weight: 700; font-size: 0.88rem;
-      color: #555; transition: color 0.2s;
+      min-height: 1.5em; font-weight: 700; font-size: 0.85rem; color: #888;
     }
     #blast-status.wait { color: var(--pool); }
     #blast-status.ok   { color: #16a34a; }
     #blast-status.err  { color: #dc2626; }
 
-    /* ── Solenoid ───────────────────────────────────────────────────────── */
-    .solenoid-inner {
-      padding: 16px; text-align: center;
-    }
-    .solenoid-label {
-      font-size: 0.7rem; font-weight: 900; text-transform: uppercase;
-      letter-spacing: 2px; color: #888; margin-bottom: 12px;
-    }
+    /* ── Solenoid ────────────────────────────────────────────────────────── */
     .solenoid-row {
       display: flex; align-items: center; justify-content: center; gap: 14px;
     }
     .solenoid-dot {
-      width: 14px; height: 14px; border-radius: 50%;
+      width: 13px; height: 13px; border-radius: 50%;
       background: #ccc; flex-shrink: 0;
       transition: background 0.3s, box-shadow 0.3s;
     }
-    .solenoid-dot.on { background: #22c55e; box-shadow: 0 0 12px #22c55e; }
+    .solenoid-dot.on { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
     #solenoid-btn {
-      padding: 12px 28px; border-radius: 14px;
+      padding: 11px 26px; border-radius: 14px;
       border: 3px solid var(--deep);
       background: white; color: var(--deep);
-      font-family: 'Nunito', sans-serif; font-size: 0.95rem; font-weight: 900;
-      cursor: pointer; transition: all 0.2s;
+      font-family: 'Nunito', sans-serif; font-size: 0.92rem; font-weight: 900;
+      cursor: pointer; transition: all 0.2s; min-height: 46px;
     }
     #solenoid-btn.on {
       background: linear-gradient(135deg, #15803d, #22c55e);
@@ -451,137 +474,621 @@ MOBILE_HTML = """<!DOCTYPE html>
     }
     #solenoid-btn:disabled { opacity: 0.45; cursor: not-allowed; }
     .solenoid-hint {
-      font-size: 0.75rem; color: #888; margin-top: 10px; font-style: italic;
+      font-size: 0.73rem; color: #888; margin-top: 10px;
+      font-style: italic; font-weight: 700; text-align: center;
     }
 
-    /* ── Recent detections ──────────────────────────────────────────────── */
-    .recent-inner { padding: 14px 14px 16px; }
-    .recent-label {
-      font-size: 0.7rem; font-weight: 900; text-transform: uppercase;
-      letter-spacing: 2px; color: #888; margin-bottom: 10px;
+    /* ── Detection controls ──────────────────────────────────────────────── */
+    .ctrl-group { display: flex; gap: 6px; margin-bottom: 8px; }
+    .ctrl-group:last-child { margin-bottom: 0; }
+    .ctrl-btn {
+      flex: 1; padding: 9px 6px; border-radius: 12px;
+      border: 2px solid rgba(0,119,182,0.2);
+      background: rgba(255,255,255,0.55);
+      color: #777; font-family: 'Nunito', sans-serif;
+      font-size: 0.8rem; font-weight: 900;
+      cursor: pointer; transition: all 0.15s; min-height: 44px;
     }
-    .det-scroll {
-      display: flex; gap: 10px;
-      overflow-x: auto; -webkit-overflow-scrolling: touch;
-      padding-bottom: 4px; scrollbar-width: none;
-    }
-    .det-scroll::-webkit-scrollbar { display: none; }
-    .det-chip {
-      flex-shrink: 0;
-      background: linear-gradient(135deg, var(--deep), var(--pool));
-      border-radius: 12px; padding: 9px 14px;
-      color: white; font-size: 0.8rem; font-weight: 700; white-space: nowrap;
-    }
-    .det-class { color: var(--yellow); display: block; }
-    .det-empty { color: #aaa; font-size: 0.85rem; font-style: italic; }
+    .ctrl-btn.active           { background: var(--deep); color: white; border-color: var(--deep); }
+    .ctrl-btn.active.squirrel  { background: #d97706; border-color: #d97706; }
+    .ctrl-btn.active.bird      { background: #2563eb; border-color: #2563eb; }
+    .ctrl-btn.active.wildlife  { background: #16a34a; border-color: #16a34a; }
 
-    /* ── Animations ─────────────────────────────────────────────────────── */
+    /* ── Summary pills ───────────────────────────────────────────────────── */
+    #summary {
+      display: flex; gap: 8px; padding: 4px 14px 8px;
+      flex-wrap: wrap; font-size: 0.8rem;
+    }
+    .pill {
+      border-radius: 20px; padding: 5px 14px;
+      font-weight: 900; font-size: 0.78rem;
+    }
+    .pill.default  { background: rgba(0,119,182,0.12); color: var(--deep); }
+    .pill.squirrel { background: #fef3c7; color: #d97706; }
+    .pill.bird     { background: #dbeafe; color: #2563eb; }
+    .pill.wildlife { background: #dcfce7; color: #16a34a; }
+
+    /* ── Detection cards grid ────────────────────────────────────────────── */
+    #cards {
+      padding: 4px 14px 8px;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    @media (min-width: 600px) and (max-width: 1099px) { #cards { grid-template-columns: 1fr 1fr; } }
+    @media (min-width: 1100px)                         { #cards { grid-template-columns: 1fr 1fr; } }
+    @media (min-width: 1440px)                         { #cards { grid-template-columns: 1fr 1fr 1fr; } }
+
+    .det-card {
+      background: var(--glass);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 4px 16px rgba(0,100,160,0.10);
+      border-left: 4px solid rgba(0,119,182,0.18);
+    }
+    .det-card.squirrel { border-left-color: #f59e0b; }
+    .det-card.bird     { border-left-color: #3b82f6; }
+    .det-card.wildlife { border-left-color: #22c55e; }
+    .det-card.flagged  { opacity: 0.42; }
+
+    .img-wrap { position: relative; cursor: zoom-in; }
+    .img-wrap img { width: 100%; display: block; object-fit: cover; background: #1a1a2e; }
+    .bbox-canvas  { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
+    .det-card-body {
+      padding: 11px 14px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .cls { font-size: 0.9rem; font-weight: 900; text-transform: capitalize; }
+    .cls.squirrel { color: #d97706; }
+    .cls.bird     { color: #2563eb; }
+    .cls.wildlife { color: #16a34a; }
+    .ts  { font-size: 0.66rem; color: #888; margin-top: 2px; font-weight: 700; }
+    .card-right { display: flex; align-items: center; gap: 10px; }
+    .conf { font-family: 'Pacifico', cursive; font-size: 1.25rem; color: var(--deep); }
+    .flag-btn {
+      background: none; border: 2px solid rgba(0,119,182,0.18);
+      border-radius: 10px; color: #bbb; padding: 8px;
+      font-size: 0.78rem; cursor: pointer; min-height: 44px; min-width: 44px;
+    }
+    .flag-btn:active  { color: #ef4444; border-color: #ef4444; }
+    .flag-btn.flagged { color: #ef4444; border-color: #ef4444; cursor: default; }
+
+    #empty {
+      grid-column: 1 / -1; text-align: center;
+      color: #888; padding: 60px 20px; font-size: 0.95rem; font-weight: 700;
+    }
+
+    /* ── Lightbox ────────────────────────────────────────────────────────── */
+    #lightbox {
+      display: none; position: fixed; inset: 0; z-index: 100;
+      background: rgba(0,0,0,0.95); overflow: auto;
+    }
+    #lightbox.open { display: block; }
+    #lb-wrap { position: relative; display: inline-block; min-width: 100%; min-height: 100%; }
+    #lb-img  { display: block; max-width: 100vw; }
+    #lb-canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+    #lb-close {
+      position: fixed; top: 12px; right: 12px; z-index: 101;
+      background: rgba(0,0,0,0.7); color: #fff; border: none;
+      border-radius: 50%; width: 44px; height: 44px;
+      font-size: 1.1rem; cursor: pointer;
+    }
+
+    /* ── Animations ──────────────────────────────────────────────────────── */
     @keyframes blink {
       0%, 100% { opacity: 1; }
       50%       { opacity: 0.3; }
     }
-
-    /* ── Footer ─────────────────────────────────────────────────────────── */
-    footer {
-      text-align: center; padding: 12px 20px 24px;
-      font-size: 0.68rem; color: rgba(0,80,140,0.55); font-weight: 700;
-    }
-    footer a { color: var(--deep); text-decoration: none; }
   </style>
 </head>
 <body>
+
 <header>
-  <h1>🐿️ SquirrelBGone 💦</h1>
-  <p class="tagline">Spray First · Ask Questions Never</p>
+  <div style="width:90px"></div>
+  <div class="header-title">
+    <h1>🐿️ SquirrelBGone 💦</h1>
+    <p class="tagline">Spray First · Ask Questions Never</p>
+    <p id="meta"></p>
+  </div>
+  <button id="refresh-btn" onclick="load()">↺ Refresh</button>
 </header>
 
-<main>
+<div id="layout">
 
-  <!-- Live cam -->
-  <div class="card">
-    <div class="cam-header">
-      <div class="live-dot"></div>
-      <span class="live-label">LIVE</span>
-    </div>
-    <img id="stream-img" src="/api/stream" alt="Live cam"
-         onerror="showNoStream()" onload="hideNoStream()">
-    <div id="no-stream" class="no-stream">
-      <span class="no-stream-icon">📷</span>
-      <span>Camera offline</span>
-    </div>
-  </div>
+  <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
+  <div id="sidebar">
 
-  <!-- Stats -->
-  <div class="card">
-    <div class="stats-grid">
-      <div class="stat">
-        <div class="stat-num" id="squirrel-count">—</div>
-        <div class="stat-label">🐿️ Squirrels Today</div>
+    <!-- Live stream + zone picker -->
+    <div class="card">
+      <div class="card-head">
+        <div class="live-dot"></div>
+        <span class="live-label">LIVE</span>
+        <span style="flex:1"></span>
+        <span>🎯 Drag to set feeder zone</span>
       </div>
-      <div class="stat">
-        <div class="stat-num" id="last-seen" style="font-size:1.4rem">—</div>
-        <div class="stat-label">⏱️ Last Spotted</div>
+      <div id="stream-wrap">
+        <img id="stream-img" src="/api/stream" alt="Live feed"
+             onerror="showNoStream()" onload="onStreamLoad()">
+        <canvas id="zone-canvas"></canvas>
       </div>
-    </div>
-  </div>
-
-  <!-- Blast button -->
-  <div class="card blast-card">
-    <div class="card-inner">
-      <div class="section-title">🎯 Manual Fire Control</div>
-      <button id="blast-btn" onclick="fireSpray()">
-        <span class="btn-emoji">💦</span>
-        <span class="btn-text">BLAST&nbsp;'EM</span>
-      </button>
-      <div class="dur-row">
-        <span class="dur-label">Duration</span>
-        <input id="dur-input" type="number" value="1.0" min="0.1" max="10" step="0.1">
-        <span class="dur-label">sec</span>
+      <div id="no-stream">
+        <span style="font-size:2.5rem">📷</span>
+        <span>Camera offline</span>
       </div>
-      <div id="blast-status">Ready to soak that fuzzy menace 🐿️</div>
-    </div>
-  </div>
-
-  <!-- Solenoid hold-open -->
-  <div class="card">
-    <div class="solenoid-inner">
-      <div class="solenoid-label">🚰 Solenoid — Hold Open</div>
-      <div class="solenoid-row">
-        <div class="solenoid-dot" id="solenoid-dot"></div>
-        <button id="solenoid-btn" onclick="toggleSolenoid()">💧 Turn On</button>
-      </div>
-      <div class="solenoid-hint" id="solenoid-hint">Holds valve open until manually turned off</div>
-    </div>
-  </div>
-
-  <!-- Recent detections -->
-  <div class="card">
-    <div class="recent-inner">
-      <div class="recent-label">🔍 Recent Detections</div>
-      <div class="det-scroll" id="det-scroll">
-        <span class="det-empty">Loading…</span>
+      <div class="zone-controls">
+        <span class="zone-hint">Click and drag above to define the feeder area</span>
+        <button id="zone-save-btn" onclick="saveZone()" disabled>Save Zone</button>
+        <button id="zone-clear-btn" onclick="clearZone()">Clear</button>
+        <span id="zone-status"></span>
       </div>
     </div>
+
+    <!-- Stats -->
+    <div class="card">
+      <div class="card-body">
+        <div class="stats-grid">
+          <div class="stat">
+            <div class="stat-num" id="squirrel-count">—</div>
+            <div class="stat-label">🐿️ Squirrels Today</div>
+          </div>
+          <div class="stat">
+            <div class="stat-num" id="last-seen" style="font-size:1.25rem">—</div>
+            <div class="stat-label">⏱️ Last Spotted</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Blast button -->
+    <div class="card">
+      <div class="card-body blast-wrap">
+        <div class="section-title">🎯 Manual Fire Control</div>
+        <button id="blast-btn" onclick="fireSpray()">
+          <span class="btn-emoji">💦</span>
+          <span class="btn-text">BLAST&nbsp;'EM</span>
+        </button>
+        <div class="dur-row">
+          <span class="dur-label">Duration</span>
+          <input id="dur-input" type="number" value="1.0" min="0.1" max="10" step="0.1">
+          <span class="dur-label">sec</span>
+        </div>
+        <div id="blast-status">Ready to soak that fuzzy menace 🐿️</div>
+      </div>
+    </div>
+
+    <!-- Solenoid hold-open -->
+    <div class="card">
+      <div class="card-head" style="justify-content:center; border-bottom:none; padding-bottom:4px">
+        🚰 Solenoid — Hold Open
+      </div>
+      <div class="card-body" style="text-align:center; padding-top:10px">
+        <div class="solenoid-row">
+          <div class="solenoid-dot" id="solenoid-dot"></div>
+          <button id="solenoid-btn" onclick="toggleSolenoid()">💧 Turn On</button>
+        </div>
+        <div class="solenoid-hint" id="solenoid-hint">Holds valve open until manually turned off</div>
+      </div>
+    </div>
+
+  </div><!-- #sidebar -->
+
+  <!-- ── Main ──────────────────────────────────────────────────────────── -->
+  <div id="main">
+
+    <!-- Controls -->
+    <div class="card">
+      <div class="card-body">
+        <div class="ctrl-group">
+          <button class="ctrl-btn win-btn" data-w="15"    onclick="setWindow(15)">15m</button>
+          <button class="ctrl-btn win-btn active" data-w="60" onclick="setWindow(60)">1h</button>
+          <button class="ctrl-btn win-btn" data-w="today" onclick="setWindow('today')">Today</button>
+        </div>
+        <div class="ctrl-group">
+          <button class="ctrl-btn cls-btn active"   data-f="all"      onclick="setFilter('all')">All</button>
+          <button class="ctrl-btn cls-btn squirrel" data-f="squirrel" onclick="setFilter('squirrel')">🐿️ Squirrel</button>
+          <button class="ctrl-btn cls-btn bird"     data-f="bird"     onclick="setFilter('bird')">🐦 Bird</button>
+          <button class="ctrl-btn cls-btn wildlife" data-f="wildlife" onclick="setFilter('wildlife')">🦌 Wildlife</button>
+          <button class="ctrl-btn hc-btn" id="hc-btn" onclick="toggleHighConf()">&#x2265;<span id="hc-label">70</span>%</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="summary"></div>
+    <div id="cards"></div>
+
+  </div><!-- #main -->
+
+</div><!-- #layout -->
+
+<div id="lightbox" onclick="handleLbClick(event)">
+  <div id="lb-wrap">
+    <img id="lb-img" onload="drawLbBox()">
+    <canvas id="lb-canvas"></canvas>
   </div>
-
-</main>
-
-<footer>
-  SquirrelBGone &nbsp;·&nbsp; <a href="/">Full dashboard →</a>
-</footer>
+</div>
+<button id="lb-close" style="display:none" onclick="closeLightbox()">✕</button>
 
 <script>
-  // ── Stream error handling ────────────────────────────────────────────────
+  // ── Stream ───────────────────────────────────────────────────────────────
   function showNoStream() {
-    document.getElementById('stream-img').style.display = 'none';
-    document.getElementById('no-stream').style.display = 'flex';
+    document.getElementById('stream-wrap').style.display = 'none';
+    document.getElementById('no-stream').style.display  = 'flex';
   }
-  function hideNoStream() {
-    document.getElementById('stream-img').style.display = 'block';
-    document.getElementById('no-stream').style.display = 'none';
+  function onStreamLoad() {
+    document.getElementById('stream-wrap').style.display = '';
+    document.getElementById('no-stream').style.display  = 'none';
+    const img    = document.getElementById('stream-img');
+    const canvas = document.getElementById('zone-canvas');
+    canvas.width  = img.clientWidth;
+    canvas.height = img.clientHeight;
+    drawZoneCanvas();
   }
 
-  // ── Water drop animation ─────────────────────────────────────────────────
+  // ── Zone picker ──────────────────────────────────────────────────────────
+  let _feederZone = null, _zoneStart = null, _zoneDraft = null;
+
+  async function loadFeederZone() {
+    try {
+      const data = await (await fetch('/api/zone')).json();
+      _feederZone = (data && data.x1 !== undefined) ? data : null;
+    } catch {}
+  }
+
+  function drawZoneCanvas() {
+    const canvas = document.getElementById('zone-canvas');
+    const ctx    = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const zone = _zoneDraft || _feederZone;
+    if (!zone) return;
+    const x1 = zone.x1 * canvas.width,  y1 = zone.y1 * canvas.height;
+    const x2 = zone.x2 * canvas.width,  y2 = zone.y2 * canvas.height;
+    ctx.fillStyle   = 'rgba(255,209,102,0.1)';
+    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.strokeStyle = '#FFD166';
+    ctx.lineWidth   = 2.5;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#FFD166';
+    ctx.font      = 'bold 11px system-ui';
+    ctx.fillText('Feeder Zone', x1 + 5, y1 + 15);
+  }
+
+  function _frac(clientX, clientY, canvas) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (clientX - r.left) / r.width)),
+      y: Math.max(0, Math.min(1, (clientY - r.top)  / r.height)),
+    };
+  }
+
+  function initZonePicker() {
+    const canvas = document.getElementById('zone-canvas');
+
+    canvas.addEventListener('mousedown', e => {
+      _zoneStart = _frac(e.clientX, e.clientY, canvas);
+      _zoneDraft = null; e.preventDefault();
+    });
+    canvas.addEventListener('mousemove', e => {
+      if (!_zoneStart) return;
+      const p = _frac(e.clientX, e.clientY, canvas);
+      _zoneDraft = {
+        x1: Math.min(_zoneStart.x, p.x), y1: Math.min(_zoneStart.y, p.y),
+        x2: Math.max(_zoneStart.x, p.x), y2: Math.max(_zoneStart.y, p.y),
+      };
+      drawZoneCanvas();
+      document.getElementById('zone-save-btn').disabled = false;
+    });
+    canvas.addEventListener('mouseup',    () => { _zoneStart = null; });
+    canvas.addEventListener('mouseleave', () => { _zoneStart = null; });
+
+    canvas.addEventListener('touchstart', e => {
+      const t = e.touches[0];
+      _zoneStart = _frac(t.clientX, t.clientY, canvas);
+      _zoneDraft = null; e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener('touchmove', e => {
+      if (!_zoneStart) return;
+      const t = e.touches[0];
+      const p = _frac(t.clientX, t.clientY, canvas);
+      _zoneDraft = {
+        x1: Math.min(_zoneStart.x, p.x), y1: Math.min(_zoneStart.y, p.y),
+        x2: Math.max(_zoneStart.x, p.x), y2: Math.max(_zoneStart.y, p.y),
+      };
+      drawZoneCanvas();
+      document.getElementById('zone-save-btn').disabled = false;
+      e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener('touchend', () => { _zoneStart = null; });
+
+    if (_feederZone) {
+      document.getElementById('zone-status').textContent = 'Zone active ✓';
+      document.getElementById('zone-status').className  = 'ok';
+    }
+    drawZoneCanvas();
+  }
+
+  async function saveZone() {
+    if (!_zoneDraft) return;
+    const btn = document.getElementById('zone-save-btn');
+    const st  = document.getElementById('zone-status');
+    btn.disabled = true;
+    try {
+      const res  = await fetch('/api/zone', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(_zoneDraft),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        _feederZone = _zoneDraft; _zoneDraft = null;
+        st.textContent = 'Zone saved ✓'; st.className = 'ok';
+      } else {
+        st.textContent = 'Save failed'; st.className = 'err';
+      }
+    } catch { st.textContent = 'Save failed'; st.className = 'err'; }
+  }
+
+  async function clearZone() {
+    try {
+      await fetch('/api/zone', { method: 'DELETE' });
+      _feederZone = null; _zoneDraft = null; drawZoneCanvas();
+      const st = document.getElementById('zone-status');
+      st.textContent = 'Zone cleared'; st.className = '';
+      document.getElementById('zone-save-btn').disabled = true;
+    } catch {}
+  }
+
+  // ── Detection state ──────────────────────────────────────────────────────
+  const BOX_COLOR = { squirrel: '#f59e0b', bird: '#3b82f6' };
+  function boxColor(cls) { return BOX_COLOR[cls] || '#fff'; }
+
+  let currentWindow  = 60;
+  let currentFilter  = 'all';
+  let highConfOnly   = false;
+  let highConfThresh = 0.70;
+  let allData = [];
+  let lbData  = null;
+  const flaggedSet = new Set();
+  const detMap = {};
+
+  const BIRD_CLASSES     = new Set(['bird','crow','pigeon','robin','sparrow']);
+  const WILDLIFE_CLASSES = new Set([
+    'deer','fawn','buck','doe','fox','raccoon','rabbit','hog','boar',
+    'bear','coyote','skunk','opossum','groundhog','turkey',
+  ]);
+
+  function windowMinutes() {
+    if (currentWindow === 'today') {
+      const n = new Date();
+      return n.getHours() * 60 + n.getMinutes() + 1;
+    }
+    return currentWindow;
+  }
+
+  function setWindow(w) {
+    currentWindow = w;
+    document.querySelectorAll('.win-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.w === String(w))
+    );
+    load();
+  }
+
+  function setFilter(f) {
+    currentFilter = f;
+    document.querySelectorAll('.cls-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.f === f)
+    );
+    render();
+  }
+
+  function toggleHighConf() {
+    highConfOnly = !highConfOnly;
+    document.getElementById('hc-btn').classList.toggle('active', highConfOnly);
+    render();
+  }
+
+  function cardClass(cls) {
+    if (cls === 'squirrel')        return 'squirrel';
+    if (BIRD_CLASSES.has(cls))     return 'bird';
+    if (WILDLIFE_CLASSES.has(cls)) return 'wildlife';
+    return '';
+  }
+
+  function filtered() {
+    let rows = allData;
+    if (currentFilter === 'squirrel')     rows = rows.filter(d => d.class === 'squirrel');
+    else if (currentFilter === 'bird')     rows = rows.filter(d => BIRD_CLASSES.has(d.class));
+    else if (currentFilter === 'wildlife') rows = rows.filter(d => WILDLIFE_CLASSES.has(d.class));
+    if (highConfOnly) rows = rows.filter(d => parseFloat(d.confidence) >= highConfThresh);
+    return rows;
+  }
+
+  function ago(isoStr) {
+    const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+    if (diff < 60)   return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    return Math.floor(diff / 3600) + 'h ago';
+  }
+
+  // ── Stats (always full-day, independent of window filter) ────────────────
+  async function updateStats() {
+    try {
+      const n    = new Date();
+      const mins = n.getHours() * 60 + n.getMinutes() + 1;
+      const data = await (await fetch('/api/detections?minutes=' + mins)).json();
+      const squirrels = data.filter(d => d.class === 'squirrel');
+      document.getElementById('squirrel-count').textContent = squirrels.length || '0';
+      const last = squirrels[0];
+      document.getElementById('last-seen').textContent = last ? ago(last.timestamp) : 'None today';
+    } catch {}
+  }
+
+  // ── Flag ─────────────────────────────────────────────────────────────────
+  function flagId(ts) { return 'flag-' + ts.replace(/[:.]/g, '-'); }
+
+  async function flagDetection(ts) {
+    if (flaggedSet.has(ts)) return;
+    const d = detMap[ts];
+    if (!d) return;
+    try {
+      await fetch('/api/flag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          timestamp: d.timestamp, class: d.class,
+          confidence: d.confidence, frame_path: d.frame_path || '',
+        }),
+      });
+      flaggedSet.add(ts);
+      const btn  = document.getElementById(flagId(ts));
+      const card = btn?.closest('.det-card');
+      if (btn)  { btn.classList.add('flagged'); btn.disabled = true; }
+      if (card) card.classList.add('flagged');
+    } catch {}
+  }
+
+  // ── Bbox ─────────────────────────────────────────────────────────────────
+  function drawBox(img) {
+    const x1 = +img.dataset.x1, y1 = +img.dataset.y1;
+    const w  = +img.dataset.w,  h  = +img.dataset.h;
+    if (!w || !h) return;
+    const canvas = img.nextElementSibling;
+    canvas.width  = img.clientWidth;
+    canvas.height = img.clientHeight;
+    const sx = img.clientWidth  / img.naturalWidth;
+    const sy = img.clientHeight / img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    if (_feederZone) {
+      ctx.strokeStyle = 'rgba(255,209,102,0.5)';
+      ctx.lineWidth = 1; ctx.setLineDash([4, 2]);
+      ctx.strokeRect(
+        _feederZone.x1 * img.naturalWidth  * sx,
+        _feederZone.y1 * img.naturalHeight * sy,
+        (_feederZone.x2 - _feederZone.x1) * img.naturalWidth  * sx,
+        (_feederZone.y2 - _feederZone.y1) * img.naturalHeight * sy,
+      );
+      ctx.setLineDash([]);
+    }
+    ctx.strokeStyle = boxColor(img.dataset.cls);
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x1 * sx, y1 * sy, w * sx, h * sy);
+  }
+
+  function drawLbBox() {
+    if (!lbData?.w || !lbData?.h) return;
+    const img    = document.getElementById('lb-img');
+    const canvas = document.getElementById('lb-canvas');
+    canvas.width  = img.clientWidth;
+    canvas.height = img.clientHeight;
+    canvas.style.width  = img.clientWidth  + 'px';
+    canvas.style.height = img.clientHeight + 'px';
+    const sx = img.clientWidth  / img.naturalWidth;
+    const sy = img.clientHeight / img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = boxColor(lbData.cls);
+    ctx.lineWidth = 4;
+    ctx.strokeRect(lbData.x1 * sx, lbData.y1 * sy, lbData.w * sx, lbData.h * sy);
+  }
+
+  // ── Lightbox ──────────────────────────────────────────────────────────────
+  function openLightbox(imgEl) {
+    lbData = {
+      src: imgEl.src,
+      x1: +imgEl.dataset.x1, y1: +imgEl.dataset.y1,
+      w:  +imgEl.dataset.w,  h:  +imgEl.dataset.h,
+      cls: imgEl.dataset.cls,
+    };
+    const lb = document.getElementById('lightbox');
+    document.getElementById('lb-img').src = lbData.src;
+    lb.scrollTop = 0; lb.scrollLeft = 0;
+    lb.classList.add('open');
+    document.getElementById('lb-close').style.display = 'block';
+  }
+
+  function closeLightbox() {
+    document.getElementById('lightbox').classList.remove('open');
+    document.getElementById('lb-close').style.display = 'none';
+    document.getElementById('lb-img').src = '';
+    lbData = null;
+  }
+
+  function handleLbClick(e) {
+    if (e.target.id === 'lightbox' || e.target.id === 'lb-wrap') closeLightbox();
+  }
+
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  function render() {
+    const data      = filtered();
+    const squirrels = allData.filter(d => d.class === 'squirrel').length;
+    const birds     = allData.filter(d => BIRD_CLASSES.has(d.class)).length;
+    const wildlife  = allData.filter(d => WILDLIFE_CLASSES.has(d.class)).length;
+    const other     = allData.length - squirrels - birds - wildlife;
+
+    document.getElementById('summary').innerHTML =
+      (squirrels ? `<span class="pill squirrel">🐿️ ${squirrels}</span>` : '') +
+      (birds     ? `<span class="pill bird">🐦 ${birds}</span>`         : '') +
+      (wildlife  ? `<span class="pill wildlife">🦌 ${wildlife}</span>`  : '') +
+      (other     ? `<span class="pill default">${other} other</span>`   : '');
+
+    const cards = document.getElementById('cards');
+    if (!data.length) {
+      cards.innerHTML = '<div id="empty">No detections in this window 🌤️</div>';
+      return;
+    }
+
+    cards.innerHTML = data.map(d => {
+      const cls       = (d.class || 'unknown').toLowerCase();
+      const cc        = cardClass(cls);
+      const conf      = Math.round(parseFloat(d.confidence) * 100);
+      const isFlagged = flaggedSet.has(d.timestamp);
+      const imgHtml   = d.image_url ? `
+        <div class="img-wrap" onclick="openLightbox(this.querySelector('img'))">
+          <img src="${d.image_url}" alt="${cls}" loading="lazy"
+               data-x1="${d.x1 || 0}" data-y1="${d.y1 || 0}"
+               data-w="${d.w || 0}"   data-h="${d.h || 0}"
+               data-cls="${cc}" onload="drawBox(this)">
+          <canvas class="bbox-canvas"></canvas>
+        </div>` : '';
+      return `
+        <div class="det-card ${cc}${isFlagged ? ' flagged' : ''}">
+          ${imgHtml}
+          <div class="det-card-body">
+            <div>
+              <div class="cls ${cc}">${cls}</div>
+              <div class="ts">${ago(d.timestamp)} &middot; ${d.timestamp}</div>
+            </div>
+            <div class="card-right">
+              <div class="conf">${conf}%</div>
+              <button class="flag-btn${isFlagged ? ' flagged' : ''}"
+                      id="${flagId(d.timestamp)}"
+                      ${isFlagged ? 'disabled' : ''}
+                      onclick="flagDetection('${d.timestamp}')">🚩</button>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  async function load() {
+    try {
+      allData = await (await fetch('/api/detections?minutes=' + windowMinutes())).json();
+      allData.forEach(d => { detMap[d.timestamp] = d; });
+    } catch {
+      document.getElementById('meta').textContent = 'Error loading detections.';
+      return;
+    }
+    document.getElementById('meta').textContent =
+      allData.length + ' detection' + (allData.length !== 1 ? 's' : '') +
+      ' · ' + new Date().toLocaleTimeString();
+    render();
+  }
+
+  // ── Spray ─────────────────────────────────────────────────────────────────
   function spawnDrops(btn) {
     const emojis = ['💦', '💧', '🌊', '💦', '💧'];
     for (let i = 0; i < 7; i++) {
@@ -597,30 +1104,24 @@ MOBILE_HTML = """<!DOCTYPE html>
     }
   }
 
-  // ── Spray ────────────────────────────────────────────────────────────────
   async function fireSpray() {
     const duration = parseFloat(document.getElementById('dur-input').value) || 1.0;
     const btn    = document.getElementById('blast-btn');
     const status = document.getElementById('blast-status');
     btn.disabled = true;
     spawnDrops(btn);
-    status.textContent = 'Firing! 💦💦💦';
-    status.className = 'wait';
+    status.textContent = 'Firing! 💦💦💦'; status.className = 'wait';
     try {
-      const res  = await fetch('/api/spray?duration=' + duration, { method: 'POST' });
-      const data = await res.json();
+      const data = await (await fetch('/api/spray?duration=' + duration, { method: 'POST' })).json();
       if (data.ok) {
-        status.textContent = `${data.duration}s spray queued — waiting for detect.py…`;
-        status.className = 'wait';
+        status.textContent = `${data.duration}s spray queued…`; status.className = 'wait';
         pollSpray(data.duration, btn, status);
       } else {
-        status.textContent = 'Something went wrong 😬';
-        status.className = 'err';
+        status.textContent = 'Something went wrong 😬'; status.className = 'err';
         btn.disabled = false;
       }
     } catch {
-      status.textContent = 'Connection error 📡';
-      status.className = 'err';
+      status.textContent = 'Connection error 📡'; status.className = 'err';
       btn.disabled = false;
     }
   }
@@ -634,19 +1135,17 @@ MOBILE_HTML = """<!DOCTYPE html>
         if (!data.pending) {
           clearInterval(t);
           status.textContent = `GOTCHA! 🐿️💦 (${duration}s blast complete)`;
-          status.className = 'ok';
-          btn.disabled = false;
+          status.className = 'ok'; btn.disabled = false;
         } else if (n > 30) {
           clearInterval(t);
           status.textContent = 'Timed out — is detect.py running? 🤔';
-          status.className = 'err';
-          btn.disabled = false;
+          status.className = 'err'; btn.disabled = false;
         }
       } catch { clearInterval(t); btn.disabled = false; }
     }, 500);
   }
 
-  // ── Solenoid ─────────────────────────────────────────────────────────────
+  // ── Solenoid ──────────────────────────────────────────────────────────────
   let _solenoidOn = false;
 
   function updateSolenoidUI(on) {
@@ -657,7 +1156,9 @@ MOBILE_HTML = """<!DOCTYPE html>
     btn.textContent = on ? '🔴 Turn Off' : '💧 Turn On';
     btn.classList.toggle('on', on);
     dot.classList.toggle('on', on);
-    hint.textContent = on ? 'Valve is OPEN — water flowing! 🌊' : 'Holds valve open until manually turned off';
+    hint.textContent = on
+      ? 'Valve is OPEN — water flowing! 🌊'
+      : 'Holds valve open until manually turned off';
     document.getElementById('blast-btn').disabled = on;
   }
 
@@ -679,781 +1180,25 @@ MOBILE_HTML = """<!DOCTYPE html>
     } catch {}
   }
 
-  // ── Stats ────────────────────────────────────────────────────────────────
-  function ago(isoStr) {
-    const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
-    if (diff < 60)   return diff + 's';
-    if (diff < 3600) return Math.floor(diff / 60) + 'm';
-    return Math.floor(diff / 3600) + 'h';
-  }
-
-  async function loadStats() {
-    try {
-      const n = new Date();
-      const mins = n.getHours() * 60 + n.getMinutes() + 1;
-      const data = await (await fetch('/api/detections?minutes=' + mins)).json();
-      const squirrels = data.filter(d => d.class === 'squirrel');
-      document.getElementById('squirrel-count').textContent = squirrels.length;
-      const last = squirrels[0];
-      document.getElementById('last-seen').textContent = last ? ago(last.timestamp) + ' ago' : 'None today';
-
-      const scroll = document.getElementById('det-scroll');
-      if (!data.length) {
-        scroll.innerHTML = '<span class="det-empty">No detections today 🌤️</span>';
-      } else {
-        scroll.innerHTML = data.slice(0, 10).map(d => `
-          <div class="det-chip">
-            <span class="det-class">${d.class}</span>
-            ${Math.round(d.confidence * 100)}% · ${ago(d.timestamp)} ago
-          </div>`).join('');
-      }
-    } catch {}
-  }
-
   // ── Init ──────────────────────────────────────────────────────────────────
-  syncSolenoid();
-  loadStats();
+  async function init() {
+    try {
+      const cfg = await (await fetch('/api/config')).json();
+      highConfThresh = cfg.high_conf_threshold;
+      document.getElementById('hc-label').textContent = Math.round(highConfThresh * 100);
+    } catch {}
+    await loadFeederZone();
+    initZonePicker();
+    syncSolenoid();
+    updateStats();
+    load();
+  }
+
+  init();
+  setInterval(load,        30000);
+  setInterval(updateStats, 30000);
   setInterval(syncSolenoid, 3000);
-  setInterval(loadStats, 30000);
 </script>
-</body>
-</html>"""
-
-
-HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SquirrelBGone</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #111; color: #eee; }
-
-    /* ── Layout container ───────────────────────────────────────────────── */
-    #page { max-width: 1400px; margin: 0 auto; }
-
-    /* ── Header ─────────────────────────────────────────────────────────── */
-    header {
-      position: sticky; top: 0; z-index: 10;
-      padding: 12px 16px; background: #1a1a1a;
-      border-bottom: 1px solid #2a2a2a;
-      display: flex; justify-content: space-between; align-items: center;
-    }
-    h1 { font-size: 1rem; font-weight: 600; }
-    #meta { font-size: 0.75rem; color: #777; margin-top: 2px; }
-    #refresh-btn {
-      background: #2a2a2a; border: 1px solid #3a3a3a;
-      color: #ccc; padding: 6px 14px; border-radius: 6px;
-      font-size: 0.8rem; cursor: pointer; white-space: nowrap;
-    }
-    #refresh-btn:active { background: #333; }
-
-    /* ── Controls ───────────────────────────────────────────────────────── */
-    #controls {
-      padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
-      border-bottom: 1px solid #2a2a2a;
-    }
-    .ctrl-row { display: flex; gap: 6px; }
-    .ctrl-btn {
-      flex: 1; padding: 7px 0; border-radius: 6px;
-      background: #1a1a1a; border: 1px solid #2a2a2a;
-      color: #666; font-size: 0.8rem; cursor: pointer;
-    }
-    .ctrl-btn.active           { background: #2a2a2a; color: #eee;    border-color: #444; }
-    .ctrl-btn.active.squirrel  { background: #451a03; color: #f59e0b; border-color: #7c3b0a; }
-    .ctrl-btn.active.bird      { background: #0c1a40; color: #60a5fa; border-color: #1e3a8a; }
-    .ctrl-btn.active.wildlife  { background: #052e16; color: #4ade80; border-color: #166534; }
-
-    /* ── Summary pills ──────────────────────────────────────────────────── */
-    #summary {
-      display: flex; gap: 8px; padding: 10px 12px;
-      font-size: 0.8rem;
-    }
-    .pill { background: #1e1e1e; border-radius: 20px; padding: 4px 12px; color: #aaa; }
-    .pill.squirrel  { background: #451a03; color: #f59e0b; }
-    .pill.bird      { background: #0c1a40; color: #60a5fa; }
-    .pill.wildlife  { background: #052e16; color: #4ade80; }
-
-    /* ── Cards grid ─────────────────────────────────────────────────────── */
-    #cards {
-      padding: 0 12px 24px;
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 10px;
-    }
-
-    .card {
-      background: #1a1a1a; border-radius: 10px;
-      overflow: hidden; border-left: 4px solid #333;
-    }
-    .card.squirrel { border-left-color: #f59e0b; }
-    .card.bird     { border-left-color: #3b82f6; }
-    .card.wildlife { border-left-color: #22c55e; }
-    .card.flagged  { opacity: 0.45; }
-
-    .img-wrap { position: relative; cursor: zoom-in; }
-    .img-wrap img {
-      width: 100%; display: block;
-      max-height: 220px; object-fit: cover; background: #222;
-    }
-    .bbox-canvas {
-      position: absolute; top: 0; left: 0;
-      width: 100%; height: 100%; pointer-events: none;
-    }
-
-    .card-body {
-      padding: 10px 12px;
-      display: flex; justify-content: space-between; align-items: center;
-    }
-    .cls { font-size: 0.9rem; font-weight: 600; text-transform: capitalize; }
-    .cls.squirrel { color: #f59e0b; }
-    .cls.bird     { color: #60a5fa; }
-    .cls.wildlife { color: #4ade80; }
-    .ts  { font-size: 0.7rem; color: #666; margin-top: 2px; }
-    .right { display: flex; align-items: center; gap: 10px; }
-    .conf { font-size: 1.2rem; font-weight: 700; }
-    .flag-btn {
-      background: none; border: 1px solid #333; border-radius: 6px;
-      color: #555; padding: 5px 8px; font-size: 0.75rem; cursor: pointer;
-    }
-    .flag-btn:active  { color: #ef4444; border-color: #ef4444; }
-    .flag-btn.flagged { color: #ef4444; border-color: #ef4444; cursor: default; }
-
-    #empty { text-align: center; color: #555; padding: 60px 20px; font-size: 0.9rem; }
-
-    /* ── Lightbox ───────────────────────────────────────────────────────── */
-    #lightbox {
-      display: none; position: fixed; inset: 0; z-index: 100;
-      background: rgba(0,0,0,0.95); overflow: auto;
-    }
-    #lightbox.open { display: block; }
-    #lb-wrap { position: relative; display: inline-block; min-width: 100%; min-height: 100%; }
-    #lb-img { display: block; max-width: 100vw; }
-    #lb-canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
-    #lb-close {
-      position: fixed; top: 12px; right: 12px; z-index: 101;
-      background: rgba(0,0,0,0.7); color: #fff; border: none;
-      border-radius: 50%; width: 36px; height: 36px;
-      font-size: 1rem; cursor: pointer;
-    }
-
-    /* ── Desktop ────────────────────────────────────────────────────────── */
-    @media (min-width: 700px) {
-      #controls { flex-direction: row; }
-      .ctrl-row { flex: 1; }
-
-      #cards { grid-template-columns: 1fr 1fr; }
-      .img-wrap img { max-height: none; }
-    }
-
-    @media (min-width: 1100px) {
-      #cards { grid-template-columns: 1fr 1fr 1fr; }
-    }
-
-    /* ── Zone picker ────────────────────────────────────────────────────── */
-    #zone-panel {
-      margin: 12px; padding: 14px 16px;
-      background: #1a1a1a; border-radius: 10px;
-      border: 1px solid #2a2a2a;
-    }
-    #zone-panel h2 { font-size: 0.8rem; color: #777; margin-bottom: 6px; letter-spacing: 0.05em; text-transform: uppercase; }
-    .zone-hint { font-size: 0.78rem; color: #555; margin-bottom: 10px; }
-    .zone-wrap { position: relative; border-radius: 6px; overflow: hidden; width: 100%; }
-    .zone-wrap img { display: block; width: 100%; background: #0a0a0a; min-height: 120px; }
-    #zone-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; }
-    .zone-controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
-    #zone-save-btn {
-      padding: 8px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
-      background: #1a3a1a; border: 1px solid #2d6a2d; color: #4ade80; cursor: pointer;
-    }
-    #zone-save-btn:disabled { opacity: 0.4; cursor: default; }
-    #zone-clear-btn {
-      padding: 8px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
-      background: #3a1a1a; border: 1px solid #6a2d2d; color: #f87171; cursor: pointer;
-    }
-    #zone-status { font-size: 0.8rem; color: #555; }
-    #zone-status.ok  { color: #4ade80; }
-    #zone-status.err { color: #ef4444; }
-
-    /* ── Hardware test panel ────────────────────────────────────────────── */
-    #test-panel {
-      margin: 12px; padding: 14px 16px;
-      background: #1a1a1a; border-radius: 10px;
-      border: 1px solid #2a2a2a;
-    }
-    #test-panel h2 { font-size: 0.8rem; color: #777; margin-bottom: 12px; letter-spacing: 0.05em; text-transform: uppercase; }
-    .test-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    #spray-btn {
-      padding: 10px 22px; border-radius: 8px; font-size: 0.9rem; font-weight: 600;
-      background: #1a3a1a; border: 1px solid #2d6a2d; color: #4ade80; cursor: pointer;
-    }
-    #spray-btn:active { background: #2d6a2d; }
-    #spray-btn:disabled { opacity: 0.4; cursor: default; }
-    .dur-label { font-size: 0.8rem; color: #777; }
-    #dur-input {
-      width: 70px; padding: 6px 8px; border-radius: 6px;
-      background: #2a2a2a; border: 1px solid #3a3a3a; color: #eee; font-size: 0.85rem;
-    }
-    #spray-status { font-size: 0.8rem; margin-top: 8px; color: #555; min-height: 1.2em; }
-    #spray-status.ok      { color: #4ade80; }
-    #spray-status.pending { color: #f59e0b; }
-    #spray-status.err     { color: #ef4444; }
-    .test-divider { border: none; border-top: 1px solid #2a2a2a; margin: 10px 0; }
-    #toggle-btn {
-      padding: 10px 22px; border-radius: 8px; font-size: 0.9rem; font-weight: 600;
-      background: #1a1a2e; border: 1px solid #2d2d6a; color: #818cf8; cursor: pointer;
-      min-width: 120px;
-    }
-    #toggle-btn.on  { background: #3a1a1a; border-color: #6a2d2d; color: #f87171; }
-    #toggle-btn:disabled { opacity: 0.4; cursor: default; }
-    .solenoid-dot {
-      width: 10px; height: 10px; border-radius: 50%;
-      background: #333; display: inline-block; margin-right: 6px; vertical-align: middle;
-    }
-    .solenoid-dot.on { background: #f87171; box-shadow: 0 0 6px #f87171; }
-  </style>
-</head>
-<body>
-<div id="page">
-  <header>
-    <div>
-      <h1>SquirrelBGone</h1>
-      <div id="meta">loading…</div>
-    </div>
-    <button id="refresh-btn" onclick="load()">Refresh</button>
-  </header>
-
-  <div id="controls">
-    <div class="ctrl-row">
-      <button class="ctrl-btn win-btn" data-w="15"    onclick="setWindow(15)">15m</button>
-      <button class="ctrl-btn win-btn active" data-w="60" onclick="setWindow(60)">1h</button>
-      <button class="ctrl-btn win-btn" data-w="today" onclick="setWindow('today')">Today</button>
-    </div>
-    <div class="ctrl-row">
-      <button class="ctrl-btn cls-btn active"          data-f="all"      onclick="setFilter('all')">All</button>
-      <button class="ctrl-btn cls-btn squirrel"        data-f="squirrel" onclick="setFilter('squirrel')">Squirrel</button>
-      <button class="ctrl-btn cls-btn bird"            data-f="bird"     onclick="setFilter('bird')">Bird</button>
-      <button class="ctrl-btn cls-btn wildlife"        data-f="wildlife" onclick="setFilter('wildlife')">Wildlife</button>
-      <button class="ctrl-btn hc-btn"                  id="hc-btn"       onclick="toggleHighConf()">&#x2265;<span id="hc-label">70</span>%</button>
-    </div>
-  </div>
-
-  <div id="summary"></div>
-
-  <!-- Zone config -->
-  <div id="zone-panel">
-    <h2>Feeder Zone</h2>
-    <p class="zone-hint">Click and drag on the live feed to define the feeder area. Only squirrels inside this zone will trigger the sprayer.</p>
-    <div class="zone-wrap">
-      <img id="zone-stream" src="/api/stream" alt="Live feed" onload="onZoneImgLoad()">
-      <canvas id="zone-canvas"></canvas>
-    </div>
-    <div class="zone-controls">
-      <button id="zone-save-btn" onclick="saveZone()" disabled>Save Zone</button>
-      <button id="zone-clear-btn" onclick="clearZone()">Clear Zone</button>
-      <span id="zone-status"></span>
-    </div>
-  </div>
-
-  <div id="test-panel">
-    <h2>Hardware Test</h2>
-    <div class="test-row">
-      <button id="spray-btn" onclick="fireSpray()">Fire Spray</button>
-      <span class="dur-label">Duration (s)</span>
-      <input id="dur-input" type="number" value="1.0" min="0.1" max="10" step="0.1">
-    </div>
-    <div id="spray-status">Queues a spray request — detect.py fires it on its next loop.</div>
-    <hr class="test-divider">
-    <div class="test-row">
-      <button id="toggle-btn" onclick="toggleSolenoid()">
-        <span class="solenoid-dot" id="solenoid-dot"></span>
-        <span id="toggle-label">Turn On</span>
-      </button>
-      <span class="dur-label" id="toggle-hint">Hold open until turned off</span>
-    </div>
-  </div>
-
-  <div id="cards"></div>
-
-</div><!-- #page -->
-
-  <div id="lightbox" onclick="handleLbClick(event)">
-    <div id="lb-wrap">
-      <img id="lb-img" onload="drawLbBox()">
-      <canvas id="lb-canvas"></canvas>
-    </div>
-  </div>
-  <button id="lb-close" style="display:none" onclick="closeLightbox()">✕</button>
-
-  <script>
-    const BOX_COLOR = { squirrel: '#f59e0b', bird: '#3b82f6' };
-    function boxColor(cls) { return BOX_COLOR[cls] || '#fff'; }
-
-    let currentWindow   = 60;
-    let currentFilter   = 'all';
-    let highConfOnly    = false;
-    let highConfThresh  = 0.70;
-    let allData = [];
-    let lbData  = null;
-    const flaggedSet = new Set();
-    const detMap = {};
-
-    const BIRD_CLASSES     = new Set(['bird','crow','pigeon','robin','sparrow']);
-    const WILDLIFE_CLASSES = new Set([
-      'deer','fawn','buck','doe',
-      'fox','raccoon','rabbit','hog','boar',
-      'bear','coyote','skunk','opossum','groundhog','turkey',
-    ]);
-
-    function windowMinutes() {
-      if (currentWindow === 'today') {
-        const n = new Date();
-        return n.getHours() * 60 + n.getMinutes() + 1;
-      }
-      return currentWindow;
-    }
-
-    function setWindow(w) {
-      currentWindow = w;
-      document.querySelectorAll('.win-btn').forEach(b =>
-        b.classList.toggle('active', b.dataset.w === String(w))
-      );
-      load();
-    }
-
-    function setFilter(f) {
-      currentFilter = f;
-      document.querySelectorAll('.cls-btn').forEach(b =>
-        b.classList.toggle('active', b.dataset.f === f)
-      );
-      render();
-    }
-
-    function toggleHighConf() {
-      highConfOnly = !highConfOnly;
-      document.getElementById('hc-btn').classList.toggle('active', highConfOnly);
-      render();
-    }
-
-    function cardClass(cls) {
-      if (cls === 'squirrel') return 'squirrel';
-      if (BIRD_CLASSES.has(cls)) return 'bird';
-      if (WILDLIFE_CLASSES.has(cls)) return 'wildlife';
-      return '';
-    }
-
-    function filtered() {
-      let rows = allData;
-      if (currentFilter === 'squirrel') rows = rows.filter(d => d.class === 'squirrel');
-      else if (currentFilter === 'bird')     rows = rows.filter(d => BIRD_CLASSES.has(d.class));
-      else if (currentFilter === 'wildlife') rows = rows.filter(d => WILDLIFE_CLASSES.has(d.class));
-      if (highConfOnly) rows = rows.filter(d => parseFloat(d.confidence) >= highConfThresh);
-      return rows;
-    }
-
-    function flagId(ts) { return 'flag-' + ts.replace(/:/g, '-'); }
-
-    async function flagDetection(ts) {
-      if (flaggedSet.has(ts)) return;
-      const d = detMap[ts];
-      if (!d) return;
-      try {
-        await fetch('/api/flag', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            timestamp:  d.timestamp,
-            class:      d.class,
-            confidence: d.confidence,
-            frame_path: d.frame_path || '',
-          }),
-        });
-        flaggedSet.add(ts);
-        const btn  = document.getElementById(flagId(ts));
-        const card = btn && btn.closest('.card');
-        if (btn)  { btn.classList.add('flagged'); btn.disabled = true; }
-        if (card) card.classList.add('flagged');
-      } catch (e) { console.error('Flag failed', e); }
-    }
-
-    // ── Bbox drawing ────────────────────────────────────────────────────────
-
-    function drawBox(img) {
-      const x1 = +img.dataset.x1, y1 = +img.dataset.y1;
-      const w  = +img.dataset.w,  h  = +img.dataset.h;
-      if (!w || !h) return;
-      const canvas = img.nextElementSibling;
-      canvas.width  = img.clientWidth;
-      canvas.height = img.clientHeight;
-      const sx = img.clientWidth  / img.naturalWidth;
-      const sy = img.clientHeight / img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      // Draw feeder zone first (behind bbox)
-      if (_feederZone) {
-        ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 2]);
-        ctx.strokeRect(
-          _feederZone.x1 * img.naturalWidth  * sx,
-          _feederZone.y1 * img.naturalHeight * sy,
-          (_feederZone.x2 - _feederZone.x1) * img.naturalWidth  * sx,
-          (_feederZone.y2 - _feederZone.y1) * img.naturalHeight * sy,
-        );
-        ctx.setLineDash([]);
-      }
-      ctx.strokeStyle = boxColor(img.dataset.cls);
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x1 * sx, y1 * sy, w * sx, h * sy);
-    }
-
-    function drawLbBox() {
-      if (!lbData || !lbData.w || !lbData.h) return;
-      const img    = document.getElementById('lb-img');
-      const canvas = document.getElementById('lb-canvas');
-      canvas.width  = img.clientWidth;
-      canvas.height = img.clientHeight;
-      canvas.style.width  = img.clientWidth  + 'px';
-      canvas.style.height = img.clientHeight + 'px';
-      const sx = img.clientWidth  / img.naturalWidth;
-      const sy = img.clientHeight / img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.strokeStyle = boxColor(lbData.cls);
-      ctx.lineWidth = 4;
-      ctx.strokeRect(lbData.x1 * sx, lbData.y1 * sy, lbData.w * sx, lbData.h * sy);
-    }
-
-    // ── Lightbox ─────────────────────────────────────────────────────────────
-
-    function openLightbox(imgEl) {
-      lbData = {
-        src: imgEl.src,
-        x1: +imgEl.dataset.x1, y1: +imgEl.dataset.y1,
-        w:  +imgEl.dataset.w,  h:  +imgEl.dataset.h,
-        cls: imgEl.dataset.cls,
-      };
-      const lb = document.getElementById('lightbox');
-      document.getElementById('lb-img').src = lbData.src;
-      lb.scrollTop = 0; lb.scrollLeft = 0;
-      lb.classList.add('open');
-      document.getElementById('lb-close').style.display = 'block';
-    }
-
-    function closeLightbox() {
-      document.getElementById('lightbox').classList.remove('open');
-      document.getElementById('lb-close').style.display = 'none';
-      document.getElementById('lb-img').src = '';
-      lbData = null;
-    }
-
-    function handleLbClick(e) {
-      if (e.target.id === 'lightbox' || e.target.id === 'lb-wrap') closeLightbox();
-    }
-
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
-
-    // ── Render ───────────────────────────────────────────────────────────────
-
-    function ago(isoStr) {
-      const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
-      if (diff < 60)   return diff + 's ago';
-      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-      return Math.floor(diff / 3600) + 'h ago';
-    }
-
-    function render() {
-      const data = filtered();
-      const squirrels = allData.filter(d => d.class === 'squirrel').length;
-      const birds     = allData.filter(d => BIRD_CLASSES.has(d.class)).length;
-      const wildlife  = allData.filter(d => WILDLIFE_CLASSES.has(d.class)).length;
-      const other     = allData.length - squirrels - birds - wildlife;
-
-      const summary = document.getElementById('summary');
-      summary.innerHTML =
-        (squirrels ? `<span class="pill squirrel">${squirrels} squirrel${squirrels !== 1 ? 's' : ''}</span>` : '') +
-        (birds     ? `<span class="pill bird">${birds} bird${birds !== 1 ? 's' : ''}</span>` : '') +
-        (wildlife  ? `<span class="pill wildlife">${wildlife} wildlife</span>` : '') +
-        (other     ? `<span class="pill">${other} other</span>` : '');
-
-      const cards = document.getElementById('cards');
-      if (!data.length) {
-        cards.innerHTML = '<div id="empty">No detections in this window.</div>';
-        return;
-      }
-
-      cards.innerHTML = data.map(d => {
-        const cls      = (d.class || 'unknown').toLowerCase();
-        const cc       = cardClass(cls);
-        const conf     = Math.round(parseFloat(d.confidence) * 100);
-        const isFlagged = flaggedSet.has(d.timestamp);
-        const imgHtml  = d.image_url ? `
-          <div class="img-wrap" onclick="openLightbox(this.querySelector('img'))">
-            <img src="${d.image_url}" alt="${cls}" loading="lazy"
-                 data-x1="${d.x1 || 0}" data-y1="${d.y1 || 0}"
-                 data-w="${d.w || 0}"   data-h="${d.h || 0}"
-                 data-cls="${cc}" onload="drawBox(this)">
-            <canvas class="bbox-canvas"></canvas>
-          </div>` : '';
-        return `
-          <div class="card ${cc}${isFlagged ? ' flagged' : ''}">
-            ${imgHtml}
-            <div class="card-body">
-              <div>
-                <div class="cls ${cc}">${cls}</div>
-                <div class="ts">${ago(d.timestamp)} &middot; ${d.timestamp}</div>
-              </div>
-              <div class="right">
-                <div class="conf">${conf}%</div>
-                <button class="flag-btn${isFlagged ? ' flagged' : ''}"
-                        id="${flagId(d.timestamp)}"
-                        ${isFlagged ? 'disabled' : ''}
-                        onclick="flagDetection('${d.timestamp}')">&#x1F6A9;</button>
-              </div>
-            </div>
-          </div>`;
-      }).join('');
-    }
-
-    async function load() {
-      try {
-        const res = await fetch('/api/detections?minutes=' + windowMinutes());
-        allData = await res.json();
-        allData.forEach(d => { detMap[d.timestamp] = d; });
-      } catch (e) {
-        document.getElementById('meta').textContent = 'Error loading detections.';
-        return;
-      }
-
-      document.getElementById('meta').textContent =
-        allData.length + ' detection' + (allData.length !== 1 ? 's' : '') +
-        ' · ' + new Date().toLocaleTimeString();
-
-      render();
-    }
-
-    async function init() {
-      try {
-        const cfg = await (await fetch('/api/config')).json();
-        highConfThresh = cfg.high_conf_threshold;
-        const pct = Math.round(highConfThresh * 100);
-        document.getElementById('hc-label').textContent = pct;
-      } catch (e) { /* use default */ }
-      await loadFeederZone();
-      initZonePicker();
-      load();
-    }
-
-    init();
-    setInterval(load, 30000);
-
-    // ── Zone picker ──────────────────────────────────────────────────────────
-
-    let _feederZone = null;
-    let _zoneStart  = null;
-    let _zoneDraft  = null;
-
-    async function loadFeederZone() {
-      try {
-        const data = await (await fetch('/api/zone')).json();
-        _feederZone = (data && data.x1 !== undefined) ? data : null;
-      } catch {}
-    }
-
-    function onZoneImgLoad() {
-      const canvas = document.getElementById('zone-canvas');
-      const img    = document.getElementById('zone-stream');
-      canvas.width  = img.clientWidth;
-      canvas.height = img.clientHeight;
-      drawZoneCanvas();
-    }
-
-    function drawZoneCanvas() {
-      const canvas = document.getElementById('zone-canvas');
-      const ctx    = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const zone = _zoneDraft || _feederZone;
-      if (!zone) return;
-      const x1 = zone.x1 * canvas.width,  y1 = zone.y1 * canvas.height;
-      const x2 = zone.x2 * canvas.width,  y2 = zone.y2 * canvas.height;
-      ctx.fillStyle   = 'rgba(245, 158, 11, 0.08)';
-      ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-      ctx.strokeStyle = '#f59e0b';
-      ctx.lineWidth   = 2;
-      ctx.setLineDash([6, 3]);
-      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#f59e0b';
-      ctx.font      = 'bold 11px system-ui';
-      ctx.fillText('Feeder Zone', x1 + 5, y1 + 15);
-    }
-
-    function _canvasFrac(e, canvas) {
-      const r = canvas.getBoundingClientRect();
-      return {
-        x: Math.max(0, Math.min(1, (e.clientX - r.left)  / r.width)),
-        y: Math.max(0, Math.min(1, (e.clientY - r.top)   / r.height)),
-      };
-    }
-
-    function initZonePicker() {
-      const canvas = document.getElementById('zone-canvas');
-
-      canvas.addEventListener('mousedown', e => {
-        _zoneStart = _canvasFrac(e, canvas);
-        _zoneDraft = null;
-        e.preventDefault();
-      });
-
-      canvas.addEventListener('mousemove', e => {
-        if (!_zoneStart) return;
-        const p = _canvasFrac(e, canvas);
-        _zoneDraft = {
-          x1: Math.min(_zoneStart.x, p.x), y1: Math.min(_zoneStart.y, p.y),
-          x2: Math.max(_zoneStart.x, p.x), y2: Math.max(_zoneStart.y, p.y),
-        };
-        drawZoneCanvas();
-        document.getElementById('zone-save-btn').disabled = false;
-      });
-
-      canvas.addEventListener('mouseup',    () => { _zoneStart = null; });
-      canvas.addEventListener('mouseleave', () => { _zoneStart = null; });
-
-      if (_feederZone) {
-        document.getElementById('zone-status').textContent = 'Zone active';
-        document.getElementById('zone-status').className  = 'ok';
-      }
-      drawZoneCanvas();
-    }
-
-    async function saveZone() {
-      if (!_zoneDraft) return;
-      const btn    = document.getElementById('zone-save-btn');
-      const status = document.getElementById('zone-status');
-      btn.disabled = true;
-      try {
-        const res  = await fetch('/api/zone', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify(_zoneDraft),
-        });
-        const data = await res.json();
-        if (data.ok) {
-          _feederZone = _zoneDraft;
-          _zoneDraft  = null;
-          status.textContent = 'Zone saved ✓';
-          status.className   = 'ok';
-        } else {
-          status.textContent = 'Save failed';
-          status.className   = 'err';
-        }
-      } catch {
-        status.textContent = 'Save failed';
-        status.className   = 'err';
-      }
-    }
-
-    async function clearZone() {
-      try {
-        await fetch('/api/zone', { method: 'DELETE' });
-        _feederZone = null;
-        _zoneDraft  = null;
-        drawZoneCanvas();
-        const status = document.getElementById('zone-status');
-        status.textContent = 'Zone cleared';
-        status.className   = '';
-        document.getElementById('zone-save-btn').disabled = true;
-      } catch {}
-    }
-
-    // ── Hardware test ────────────────────────────────────────────────────────
-
-    async function fireSpray() {
-      const duration = parseFloat(document.getElementById('dur-input').value) || 1.0;
-      const btn    = document.getElementById('spray-btn');
-      const status = document.getElementById('spray-status');
-      btn.disabled = true;
-      status.textContent = 'Queuing…';
-      status.className = '';
-      try {
-        const res  = await fetch('/api/spray?duration=' + duration, { method: 'POST' });
-        const data = await res.json();
-        if (data.ok) {
-          status.textContent = `Queued ${data.duration}s spray — waiting for detect.py…`;
-          status.className = 'pending';
-          pollSprayStatus(data.duration);
-        } else {
-          status.textContent = 'Error queuing request.';
-          status.className = 'err';
-          btn.disabled = false;
-        }
-      } catch (e) {
-        status.textContent = 'Request failed.';
-        status.className = 'err';
-        btn.disabled = false;
-      }
-    }
-
-    async function pollSprayStatus(duration) {
-      const statusEl = document.getElementById('spray-status');
-      let attempts = 0;
-      const interval = setInterval(async () => {
-        attempts++;
-        try {
-          const res  = await fetch('/api/spray-status');
-          const data = await res.json();
-          if (!data.pending) {
-            clearInterval(interval);
-            statusEl.textContent = `Fired ${duration}s pulse.`;
-            statusEl.className = 'ok';
-            document.getElementById('spray-btn').disabled = false;
-          } else if (attempts > 20) {
-            clearInterval(interval);
-            statusEl.textContent = 'Timed out — is detect.py running?';
-            statusEl.className = 'err';
-            document.getElementById('spray-btn').disabled = false;
-          }
-        } catch (e) { clearInterval(interval); }
-      }, 500);
-    }
-
-    let _solenoidOn = false;
-
-    function updateToggleUI(on) {
-      _solenoidOn = on;
-      const btn   = document.getElementById('toggle-btn');
-      const dot   = document.getElementById('solenoid-dot');
-      const label = document.getElementById('toggle-label');
-      const hint  = document.getElementById('toggle-hint');
-      btn.classList.toggle('on', on);
-      dot.classList.toggle('on', on);
-      label.textContent = on ? 'Turn Off' : 'Turn On';
-      hint.textContent  = on ? 'Solenoid is OPEN' : 'Hold open until turned off';
-      document.getElementById('spray-btn').disabled = on;
-    }
-
-    async function toggleSolenoid() {
-      const btn = document.getElementById('toggle-btn');
-      btn.disabled = true;
-      try {
-        const endpoint = _solenoidOn ? '/api/solenoid/off' : '/api/solenoid/on';
-        const res  = await fetch(endpoint, { method: 'POST' });
-        const data = await res.json();
-        updateToggleUI(data.on);
-      } catch (e) { /* ignore */ }
-      btn.disabled = false;
-    }
-
-    async function syncSolenoidStatus() {
-      try {
-        const res  = await fetch('/api/solenoid-status');
-        const data = await res.json();
-        updateToggleUI(data.on);
-      } catch (e) { /* ignore */ }
-    }
-
-    syncSolenoidStatus();
-    setInterval(syncSolenoidStatus, 3000);
-  </script>
 </body>
 </html>"""
 
@@ -1465,4 +1210,4 @@ def index():
 
 @app.get("/mobile", response_class=HTMLResponse)
 def mobile():
-    return MOBILE_HTML
+    return RedirectResponse(url="/")

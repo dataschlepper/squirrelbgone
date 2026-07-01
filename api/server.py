@@ -1484,6 +1484,40 @@ REVIEW_HTML = """<!DOCTYPE html>
       text-align: center; padding: 80px 20px;
       font-size: 1.1rem; font-weight: 700; color: #888;
     }
+
+    /* ── Lightbox ────────────────────────────────────────────────────────── */
+    .img-wrap { cursor: zoom-in; }
+
+    #lb-overlay {
+      display: none; position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.96);
+      touch-action: none;
+      overflow: hidden;
+    }
+    #lb-overlay.open { display: block; }
+    #lb-container {
+      position: absolute; top: 50%; left: 50%;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+    #lb-image { display: block; }
+    #lb-bbox-canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+    #lb-close-btn {
+      position: fixed; top: 12px; right: 12px; z-index: 201;
+      display: none;
+      background: rgba(0,0,0,0.7); color: white;
+      border: none; border-radius: 50%;
+      width: 48px; height: 48px; font-size: 1.2rem;
+      cursor: pointer;
+    }
+    #lb-hint {
+      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.75);
+      padding: 6px 16px; border-radius: 20px;
+      font-size: 0.75rem; font-weight: 700;
+      pointer-events: none; z-index: 201;
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -1499,6 +1533,15 @@ REVIEW_HTML = """<!DOCTYPE html>
 </header>
 
 <div id="frames-grid"></div>
+
+<div id="lb-overlay">
+  <div id="lb-container">
+    <img id="lb-image" alt="Frame">
+    <canvas id="lb-bbox-canvas"></canvas>
+  </div>
+</div>
+<button id="lb-close-btn" onclick="closeLb()">✕</button>
+<div id="lb-hint">Pinch to zoom · Double-tap to reset</div>
 
 <script>
   let pendingCount = 0;
@@ -1592,6 +1635,14 @@ REVIEW_HTML = """<!DOCTYPE html>
     notBtn.addEventListener('click', () =>
       labelFrame(card, f.frame_path, 'not_squirrel', f.predicted_class, f.confidence));
 
+    card.querySelector('.img-wrap').addEventListener('click', () => {
+      const img = card.querySelector('img');
+      openLb(img, {
+        x1: +(f.x1 || 0), y1: +(f.y1 || 0),
+        w:  +(f.w  || 0), h:  +(f.h  || 0), cls,
+      });
+    });
+
     return card;
   }
 
@@ -1606,6 +1657,122 @@ REVIEW_HTML = """<!DOCTYPE html>
     document.getElementById('frames-grid').innerHTML =
       '<div id="empty-state">🎉 All frames labeled! Great work.</div>';
   }
+
+  // ── Lightbox with pinch-to-zoom ──────────────────────────────────────────
+  let _lbScale = 1, _lbX = 0, _lbY = 0;
+  let _lbImgData = null;
+  let _lbTouchDist = 0, _lbTouchMid = null, _lbScaleStart = 1, _lbPosStart = null;
+  let _lbDragStart = null;
+  let _lbLastTap = 0;
+
+  function _lbApply() {
+    const c = document.getElementById('lb-container');
+    c.style.transform = `translate(calc(-50% + ${_lbX}px), calc(-50% + ${_lbY}px)) scale(${_lbScale})`;
+  }
+
+  function _lbDrawBox() {
+    const img    = document.getElementById('lb-image');
+    const canvas = document.getElementById('lb-bbox-canvas');
+    if (!_lbImgData || !_lbImgData.w || !_lbImgData.h) { canvas.style.display = 'none'; return; }
+    canvas.width  = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.style.width  = img.naturalWidth  + 'px';
+    canvas.style.height = img.naturalHeight + 'px';
+    canvas.style.display = '';
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = boxColor(_lbImgData.cls);
+    ctx.lineWidth = Math.max(2, img.naturalWidth / 200);
+    ctx.strokeRect(_lbImgData.x1, _lbImgData.y1, _lbImgData.w, _lbImgData.h);
+  }
+
+  function openLb(imgEl, data) {
+    _lbImgData = data;
+    _lbScale = 1; _lbX = 0; _lbY = 0;
+    const img = document.getElementById('lb-image');
+    img.onload = () => {
+      img.style.width  = img.naturalWidth  + 'px';
+      img.style.height = img.naturalHeight + 'px';
+      _lbDrawBox();
+    };
+    img.src = imgEl.src;
+    document.getElementById('lb-overlay').classList.add('open');
+    document.getElementById('lb-close-btn').style.display = 'block';
+    document.getElementById('lb-hint').style.display = 'block';
+    _lbApply();
+  }
+
+  function closeLb() {
+    document.getElementById('lb-overlay').classList.remove('open');
+    document.getElementById('lb-close-btn').style.display = 'none';
+    document.getElementById('lb-hint').style.display = 'none';
+    document.getElementById('lb-image').src = '';
+    _lbImgData = null;
+  }
+
+  function _dist(t) {
+    const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+    return Math.hypot(dx, dy);
+  }
+  function _mid(t) {
+    return { x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 };
+  }
+
+  const lbOv = document.getElementById('lb-overlay');
+
+  lbOv.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) {
+      _lbTouchDist  = _dist(e.touches);
+      _lbTouchMid   = _mid(e.touches);
+      _lbScaleStart = _lbScale;
+      _lbPosStart   = { x: _lbX, y: _lbY };
+      _lbDragStart  = null;
+    } else if (e.touches.length === 1) {
+      // Double-tap to reset
+      const now = Date.now();
+      if (now - _lbLastTap < 300) {
+        _lbScale = 1; _lbX = 0; _lbY = 0; _lbApply();
+        _lbLastTap = 0; return;
+      }
+      _lbLastTap   = now;
+      _lbDragStart = { x: e.touches[0].clientX - _lbX, y: e.touches[0].clientY - _lbY };
+    }
+  }, { passive: true });
+
+  lbOv.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (e.touches.length === 2) {
+      const d = _dist(e.touches);
+      const m = _mid(e.touches);
+      _lbScale = Math.max(0.5, Math.min(10, _lbScaleStart * (d / _lbTouchDist)));
+      // Pan so the pinch midpoint stays fixed on screen
+      _lbX = _lbPosStart.x + (m.x - _lbTouchMid.x);
+      _lbY = _lbPosStart.y + (m.y - _lbTouchMid.y);
+      _lbApply();
+    } else if (e.touches.length === 1 && _lbDragStart) {
+      _lbX = e.touches[0].clientX - _lbDragStart.x;
+      _lbY = e.touches[0].clientY - _lbDragStart.y;
+      _lbApply();
+    }
+  }, { passive: false });
+
+  lbOv.addEventListener('touchend', e => {
+    if (e.touches.length < 2) { _lbTouchDist = 0; _lbTouchMid = null; }
+    if (e.touches.length < 1) _lbDragStart = null;
+    // Tap on overlay background (not the image) to close
+    if (e.changedTouches.length === 1 && e.touches.length === 0) {
+      const t = e.changedTouches[0];
+      if (t.target === lbOv && Math.abs(_lbX) < 4 && Math.abs(_lbY) < 4 && _lbScale < 1.05) closeLb();
+    }
+  }, { passive: true });
+
+  // Mouse wheel zoom (desktop)
+  lbOv.addEventListener('wheel', e => {
+    e.preventDefault();
+    _lbScale = Math.max(0.5, Math.min(10, _lbScale * (e.deltaY < 0 ? 1.12 : 0.89)));
+    _lbApply();
+  }, { passive: false });
+
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLb(); });
 
   async function init() {
     let data;

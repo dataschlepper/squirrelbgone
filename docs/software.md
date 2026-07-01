@@ -88,8 +88,9 @@ sudo systemctl start  squirrelbgone-api squirrelbgone-detect
 journalctl -u squirrelbgone-detect -f
 journalctl -u squirrelbgone-api -f
 
-# Restart after code change
-sudo systemctl restart squirrelbgone-detect squirrelbgone-api
+# Restart after code change (add alias to ~/.bashrc for convenience)
+alias sbg-restart='sudo systemctl restart squirrelbgone-detect squirrelbgone-api'
+sbg-restart
 ```
 
 ---
@@ -189,8 +190,8 @@ FastAPI app serving the dashboard and MJPEG live stream. Runs alongside `detect.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/` | GET | Desktop HTML dashboard |
-| `/mobile` | GET | Mobile-optimised dashboard |
+| `/` | GET | Responsive dashboard (desktop + mobile) |
+| `/mobile` | GET | Redirects to `/` |
 | `/api/stream` | GET | MJPEG live stream (scaled to ≤960px wide) |
 | `/api/detections?minutes=N` | GET | Detections from the last N minutes (default 60) |
 | `/api/config` | GET | Returns `log_threshold`, `high_conf_threshold` |

@@ -15,12 +15,13 @@ import csv
 import datetime
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -170,6 +171,25 @@ def _read_labeled_set() -> set:
     return labeled
 
 
+def _date_from_filename(name: str):
+    m = re.match(r"(\d{4}-\d{2}-\d{2})", name)
+    return m.group(1) if m else None
+
+
+@app.get("/api/frames/dates")
+def get_frame_dates():
+    labeled = _read_labeled_set()
+    counts: dict = {}
+    for f in FRAMES_DIR.glob("*.jpg"):
+        if f.name in labeled:
+            continue
+        d = _date_from_filename(f.name)
+        if d:
+            counts[d] = counts.get(d, 0) + 1
+    dates = sorted(counts.keys(), reverse=True)
+    return {"dates": [{"date": d, "pending": counts[d]} for d in dates]}
+
+
 @app.get("/api/config")
 def get_config():
     return {"log_threshold": LOG_THRESHOLD, "high_conf_threshold": HIGH_CONF_THRESHOLD}
@@ -267,11 +287,15 @@ def solenoid_status():
 
 
 @app.get("/api/frames/pending")
-def get_pending_frames():
-    labeled  = _read_labeled_set()
-    det_idx  = _build_detection_index()
+def get_pending_frames(date: str = Query(None)):
+    labeled   = _read_labeled_set()
+    det_idx   = _build_detection_index()
+    all_files = sorted(FRAMES_DIR.glob("*.jpg"), reverse=True)
+    if date:
+        all_files = [f for f in all_files if f.name.startswith(date)]
+
     frames = []
-    for f in sorted(FRAMES_DIR.glob("*.jpg"), reverse=True):
+    for f in all_files:
         if f.name in labeled:
             continue
         row = det_idx.get(f.name, {})
@@ -285,7 +309,46 @@ def get_pending_frames():
             "w":  row.get("w",  ""), "h":  row.get("h",  ""),
             "timestamp":       row.get("timestamp", ""),
         })
-    return {"count": len(frames), "frames": frames}
+
+    labeled_count = 0
+    if LABELS_PATH.exists():
+        try:
+            with open(LABELS_PATH, newline="") as lf:
+                for row in csv.DictReader(lf):
+                    fp = row.get("frame_path", "")
+                    if not fp:
+                        continue
+                    if date and date not in fp:
+                        continue
+                    labeled_count += 1
+        except Exception:
+            pass
+
+    confs: list[float] = []
+    class_dist: dict = {}
+    for fr in frames:
+        c = fr["confidence"]
+        if c:
+            try:
+                confs.append(float(c))
+            except ValueError:
+                pass
+        cls = (fr["predicted_class"] or "unknown").lower()
+        class_dist[cls] = class_dist.get(cls, 0) + 1
+
+    avg_conf = round(sum(confs) / len(confs), 3) if confs else None
+    high_conf_count = sum(1 for c in confs if c >= HIGH_CONF_THRESHOLD)
+
+    stats = {
+        "pending_count":       len(frames),
+        "labeled_count":       labeled_count,
+        "class_distribution":  class_dist,
+        "avg_confidence":      avg_conf,
+        "high_conf_count":     high_conf_count,
+        "high_conf_threshold": HIGH_CONF_THRESHOLD,
+    }
+
+    return {"count": len(frames), "frames": frames, "stats": stats}
 
 
 @app.post("/api/frames/label")
@@ -1353,10 +1416,8 @@ REVIEW_HTML = """<!DOCTYPE html>
       padding: 14px 20px 28px;
       box-shadow: 0 4px 20px rgba(0,60,120,0.35);
       clip-path: ellipse(100% 100% at 50% 0%);
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
+      display: flex; align-items: flex-start;
+      justify-content: space-between; gap: 12px;
     }
     .header-title { text-align: center; flex: 1; }
     h1 {
@@ -1365,158 +1426,148 @@ REVIEW_HTML = """<!DOCTYPE html>
       color: var(--yellow);
       text-shadow: 3px 3px 0 rgba(0,0,0,0.25), 0 0 30px rgba(255,209,102,0.4);
     }
-    .tagline {
-      font-size: 0.68rem; color: var(--sky);
-      font-weight: 900; text-transform: uppercase;
-      letter-spacing: 3px; margin-top: 3px;
-    }
-    #counter {
-      font-size: 0.75rem; color: var(--sky);
-      font-weight: 700; margin-top: 4px;
-    }
+    .tagline { font-size: 0.68rem; color: var(--sky); font-weight: 900; text-transform: uppercase; letter-spacing: 3px; margin-top: 3px; }
+    #counter { font-size: 0.75rem; color: var(--sky); font-weight: 700; margin-top: 4px; }
     .nav-back {
-      background: rgba(255,255,255,0.15);
-      border: 1px solid rgba(255,255,255,0.3);
+      background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
       color: rgba(255,255,255,0.9); padding: 8px 14px; border-radius: 20px;
-      font-family: 'Nunito', sans-serif;
-      font-size: 0.78rem; font-weight: 700;
+      font-family: 'Nunito', sans-serif; font-size: 0.78rem; font-weight: 700;
       text-decoration: none; white-space: nowrap;
-      min-height: 38px; align-self: center;
-      display: inline-flex; align-items: center;
+      min-height: 38px; align-self: center; display: inline-flex; align-items: center;
     }
     .nav-back:active { background: rgba(255,255,255,0.28); }
+
+    /* ── Controls bar ───────────────────────────────────────────────────── */
+    .controls-bar {
+      max-width: 1200px; margin: 0 auto;
+      padding: 16px 14px 0;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+
+    /* ── Metrics bar ────────────────────────────────────────────────────── */
+    .metrics-bar {
+      background: var(--glass);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border-radius: 16px; padding: 14px 18px;
+      box-shadow: 0 2px 12px rgba(0,100,160,0.10);
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .metrics-progress-row { display: flex; align-items: center; gap: 10px; }
+    .progress-bar-wrap {
+      flex: 1; height: 8px; background: rgba(0,119,182,0.15); border-radius: 4px; overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; border-radius: 4px;
+      background: linear-gradient(90deg, #06D6A0, #00B4D8);
+      transition: width 0.4s ease;
+    }
+    .progress-label { font-size: 0.72rem; font-weight: 900; color: var(--deep); white-space: nowrap; }
+    .metrics-pills { display: flex; flex-wrap: wrap; gap: 6px; min-height: 22px; }
+    .metrics-pill { font-size: 0.72rem; font-weight: 900; padding: 3px 10px; border-radius: 20px; }
+    .pill-squirrel { background: rgba(245,158,11,0.18); color: #b45309; }
+    .pill-bird     { background: rgba(59,130,246,0.15); color: #1d4ed8; }
+    .pill-other    { background: rgba(16,185,129,0.15); color: #065f46; }
+    .metrics-conf-row {
+      font-size: 0.72rem; font-weight: 700; color: #666;
+      display: flex; flex-wrap: wrap; gap: 14px; min-height: 16px;
+    }
+
+    /* ── Date nav ───────────────────────────────────────────────────────── */
+    .date-nav { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+    .date-nav-btn {
+      background: rgba(255,255,255,0.7); border: 1.5px solid rgba(0,119,182,0.25);
+      color: var(--deep); padding: 7px 14px; border-radius: 20px;
+      font-family: 'Nunito', sans-serif; font-size: 0.82rem; font-weight: 900;
+      cursor: pointer; min-height: 36px; transition: background 0.15s;
+    }
+    .date-nav-btn:hover:not(:disabled) { background: rgba(0,180,216,0.15); }
+    .date-nav-btn:disabled { opacity: 0.4; cursor: default; }
+    .today-btn { background: rgba(0,180,216,0.18); border-color: var(--pool); }
+    #date-display { font-size: 0.9rem; font-weight: 900; color: var(--navy); min-width: 160px; text-align: center; }
+
+    /* ── Confidence filter ──────────────────────────────────────────────── */
+    .conf-filter { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .conf-filter-label { font-size: 0.72rem; font-weight: 900; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+    .conf-btn {
+      background: rgba(255,255,255,0.7); border: 1.5px solid rgba(0,119,182,0.25);
+      color: var(--deep); padding: 5px 12px; border-radius: 20px;
+      font-family: 'Nunito', sans-serif; font-size: 0.78rem; font-weight: 900;
+      cursor: pointer; min-height: 32px; transition: background 0.15s, border-color 0.15s;
+    }
+    .conf-btn.active { background: var(--deep); color: white; border-color: var(--deep); }
 
     /* ── Grid ────────────────────────────────────────────────────────────── */
     #frames-grid {
       max-width: 1200px; margin: 0 auto;
-      padding: 20px 14px 48px;
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 14px;
+      padding: 14px 14px 48px;
+      display: grid; grid-template-columns: 1fr; gap: 14px;
     }
     @media (min-width: 600px)  { #frames-grid { grid-template-columns: 1fr 1fr; } }
     @media (min-width: 1000px) { #frames-grid { grid-template-columns: 1fr 1fr 1fr; } }
 
     /* ── Review card ─────────────────────────────────────────────────────── */
     .review-card {
-      background: var(--glass);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border-radius: 18px;
-      overflow: hidden;
+      background: var(--glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border-radius: 18px; overflow: hidden;
       box-shadow: 0 4px 16px rgba(0,100,160,0.10);
       border-left: 4px solid rgba(0,119,182,0.18);
     }
     .review-card.squirrel { border-left-color: #f59e0b; }
 
-    /* ── Image + bbox canvas ─────────────────────────────────────────────── */
-    .img-wrap {
-      position: relative; line-height: 0;
-      background: #d0eaf5;
-    }
-    .img-wrap img {
-      width: 100%; display: block;
-      border-radius: 0;
-    }
-    .bbox-canvas {
-      position: absolute; top: 0; left: 0;
-      width: 100%; height: 100%;
-      pointer-events: none;
-    }
+    .img-wrap { position: relative; line-height: 0; background: #d0eaf5; cursor: zoom-in; }
+    .img-wrap img { width: 100%; display: block; border-radius: 0; }
+    .bbox-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
 
-    /* ── Card meta row ───────────────────────────────────────────────────── */
-    .card-meta {
-      display: flex; align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px 4px;
-      gap: 8px;
-    }
+    .card-meta { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 4px; gap: 8px; }
     .cls {
-      font-size: 0.72rem; font-weight: 900;
-      text-transform: uppercase; letter-spacing: 1px;
-      padding: 3px 9px; border-radius: 30px;
+      font-size: 0.72rem; font-weight: 900; text-transform: uppercase;
+      letter-spacing: 1px; padding: 3px 9px; border-radius: 30px;
       background: rgba(0,119,182,0.12); color: var(--deep);
     }
     .cls.squirrel { background: rgba(245,158,11,0.15); color: #b45309; }
     .cls.bird     { background: rgba(59,130,246,0.12); color: #1d4ed8; }
-    .conf {
-      font-size: 0.78rem; font-weight: 900;
-      color: var(--deep);
-    }
-    .ts {
-      font-size: 0.65rem; color: #888;
-      padding: 0 12px 6px; font-weight: 700;
-    }
+    .conf { font-size: 0.78rem; font-weight: 900; color: var(--deep); }
+    .ts { font-size: 0.65rem; color: #888; padding: 0 12px 6px; font-weight: 700; }
 
-    /* ── Label buttons ───────────────────────────────────────────────────── */
-    .label-btns {
-      display: flex; gap: 8px; padding: 8px 12px 12px;
-    }
+    .label-btns { display: flex; gap: 8px; padding: 8px 12px 12px; }
     .label-btn {
-      flex: 1; padding: 10px 8px;
-      border-radius: 12px; border: none;
+      flex: 1; padding: 10px 8px; border-radius: 12px; border: none;
       font-family: 'Nunito', sans-serif; font-size: 0.85rem; font-weight: 900;
-      cursor: pointer; min-height: 44px;
-      transition: opacity 0.15s, transform 0.1s;
+      cursor: pointer; min-height: 44px; transition: opacity 0.15s, transform 0.1s;
     }
     .label-btn:active { transform: scale(0.96); }
-    .squirrel-btn {
-      background: linear-gradient(135deg, #d97706, #f59e0b); color: white;
-    }
-    .not-btn {
-      background: linear-gradient(135deg, #15803d, #22c55e); color: white;
-    }
+    .squirrel-btn { background: linear-gradient(135deg, #d97706, #f59e0b); color: white; }
+    .not-btn      { background: linear-gradient(135deg, #15803d, #22c55e); color: white; }
     .label-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
-    /* ── Exit animation ──────────────────────────────────────────────────── */
     @keyframes card-exit {
       0%   { opacity: 1; transform: scale(1); }
       100% { opacity: 0; transform: scale(0.85); }
     }
-    .card-exiting {
-      animation: card-exit 0.25s ease-in forwards;
-      pointer-events: none;
-    }
+    .card-exiting { animation: card-exit 0.25s ease-in forwards; pointer-events: none; }
 
-    /* ── Empty state ─────────────────────────────────────────────────────── */
-    #empty-state {
-      grid-column: 1 / -1;
-      text-align: center; padding: 80px 20px;
-      font-size: 1.1rem; font-weight: 700; color: #888;
-    }
+    #empty-state { grid-column: 1 / -1; text-align: center; padding: 80px 20px; font-size: 1.1rem; font-weight: 700; color: #888; }
 
     /* ── Lightbox ────────────────────────────────────────────────────────── */
-    .img-wrap { cursor: zoom-in; }
-
     #lb-overlay {
       display: none; position: fixed; inset: 0; z-index: 200;
-      background: rgba(0,0,0,0.96);
-      touch-action: none;
-      overflow: hidden;
+      background: rgba(0,0,0,0.96); touch-action: none; overflow: hidden;
     }
     #lb-overlay.open { display: block; }
-    #lb-container {
-      position: absolute; top: 50%; left: 50%;
-      transform-origin: 0 0;
-      will-change: transform;
-    }
+    #lb-container { position: absolute; top: 50%; left: 50%; transform-origin: 0 0; will-change: transform; }
     #lb-image { display: block; }
     #lb-bbox-canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
     #lb-close-btn {
-      position: fixed; top: 12px; right: 12px; z-index: 201;
-      display: none;
-      background: rgba(0,0,0,0.7); color: white;
-      border: none; border-radius: 50%;
-      width: 48px; height: 48px; font-size: 1.2rem;
-      cursor: pointer;
+      position: fixed; top: 12px; right: 12px; z-index: 201; display: none;
+      background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%;
+      width: 48px; height: 48px; font-size: 1.2rem; cursor: pointer;
     }
     #lb-hint {
       position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
       background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.75);
       padding: 6px 16px; border-radius: 20px;
       font-size: 0.75rem; font-weight: 700;
-      pointer-events: none; z-index: 201;
-      display: none;
+      pointer-events: none; z-index: 201; display: none;
     }
   </style>
 </head>
@@ -1532,6 +1583,34 @@ REVIEW_HTML = """<!DOCTYPE html>
   <div style="width:90px"></div>
 </header>
 
+<div class="controls-bar">
+  <div class="metrics-bar">
+    <div class="metrics-progress-row">
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+      <span class="progress-label" id="progress-label">— / — labeled</span>
+    </div>
+    <div class="metrics-pills" id="metrics-pills"></div>
+    <div class="metrics-conf-row" id="metrics-conf-row"></div>
+  </div>
+
+  <div class="date-nav">
+    <button class="date-nav-btn" id="prev-date-btn" onclick="goDate(-1)">← Prev</button>
+    <span id="date-display">—</span>
+    <button class="date-nav-btn" id="next-date-btn" onclick="goDate(1)">Next →</button>
+    <button class="date-nav-btn today-btn" onclick="goToday()">Today</button>
+  </div>
+
+  <div class="conf-filter">
+    <span class="conf-filter-label">Confidence:</span>
+    <button class="conf-btn active" data-conf="0"   onclick="setConf(0)">All</button>
+    <button class="conf-btn"        data-conf="0.5" onclick="setConf(0.5)">≥ 0.50</button>
+    <button class="conf-btn"        data-conf="0.7" onclick="setConf(0.7)">≥ 0.70</button>
+    <button class="conf-btn"        data-conf="0.9" onclick="setConf(0.9)">≥ 0.90</button>
+  </div>
+</div>
+
 <div id="frames-grid"></div>
 
 <div id="lb-overlay">
@@ -1544,11 +1623,147 @@ REVIEW_HTML = """<!DOCTYPE html>
 <div id="lb-hint">Pinch to zoom · Double-tap to reset</div>
 
 <script>
-  let pendingCount = 0;
+  // ── State ──────────────────────────────────────────────────────────────────
+  let allFrames    = [];
+  let currentStats = {};
+  let currentDate  = null;
+  let availableDates = [];
+  let minConf      = 0;
 
-  const BOX_COLORS = { squirrel: '#f59e0b', bird: '#3b82f6', wildlife: '#10b981' };
-  function boxColor(cls) { return BOX_COLORS[cls] || '#64748b'; }
+  const BIRD_CLASSES = new Set([
+    'bird','crow','sparrow','robin','hawk','eagle','dove','pigeon','owl',
+    'heron','goose','duck','jay','finch','cardinal','wren','thrush',
+    'blackbird','starling','swallow','mockingbird','nuthatch','chickadee',
+    'woodpecker','kestrel','osprey','vulture','egret','ibis','grebe',
+  ]);
 
+  const BOX_COLORS = { squirrel: '#f59e0b', bird: '#3b82f6' };
+  function boxColor(cls) { return BOX_COLORS[cls] || '#10b981'; }
+
+  // ── Filtering ──────────────────────────────────────────────────────────────
+  function filtered() {
+    return allFrames.filter(f => {
+      const c = parseFloat(f.confidence);
+      return isNaN(c) ? minConf === 0 : c >= minConf;
+    });
+  }
+
+  // ── Metrics ────────────────────────────────────────────────────────────────
+  function renderMetrics(stats) {
+    const labeled = stats.labeled_count || 0;
+    const pending = stats.pending_count || 0;
+    const total   = labeled + pending;
+    const pct     = total > 0 ? Math.round((labeled / total) * 100) : 0;
+
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-label').textContent =
+      labeled + ' / ' + total + ' labeled (' + pct + '%)';
+
+    const dist = stats.class_distribution || {};
+    let squirrelCount = 0, birdCount = 0, otherCount = 0;
+    for (const [cls, n] of Object.entries(dist)) {
+      if (cls === 'squirrel')       squirrelCount += n;
+      else if (BIRD_CLASSES.has(cls)) birdCount   += n;
+      else                            otherCount  += n;
+    }
+
+    const pillsEl = document.getElementById('metrics-pills');
+    pillsEl.innerHTML = '';
+    if (squirrelCount > 0)
+      pillsEl.innerHTML += '<span class="metrics-pill pill-squirrel">🐿️ ' + squirrelCount + ' squirrel</span>';
+    if (birdCount > 0)
+      pillsEl.innerHTML += '<span class="metrics-pill pill-bird">🐦 ' + birdCount + ' bird</span>';
+    if (otherCount > 0)
+      pillsEl.innerHTML += '<span class="metrics-pill pill-other">🦌 ' + otherCount + ' other</span>';
+
+    const confEl = document.getElementById('metrics-conf-row');
+    const avg    = stats.avg_confidence;
+    const high   = stats.high_conf_count || 0;
+    const thresh = stats.high_conf_threshold || 0.70;
+    if (avg !== null && avg !== undefined) {
+      confEl.innerHTML =
+        '<span>Avg confidence: <strong>' + avg.toFixed(2) + '</strong></span>' +
+        '<span>' + high + ' frame' + (high !== 1 ? 's' : '') + ' ≥ ' + thresh.toFixed(2) + '</span>';
+    } else {
+      confEl.innerHTML = '';
+    }
+  }
+
+  // ── Date navigation ────────────────────────────────────────────────────────
+  function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+  function renderDateNav() {
+    const today = todayStr();
+    const idx   = availableDates.indexOf(currentDate);
+
+    // availableDates sorted descending: older = higher index
+    document.getElementById('prev-date-btn').disabled = idx < 0 || idx >= availableDates.length - 1;
+    document.getElementById('next-date-btn').disabled = idx <= 0;
+
+    if (currentDate) {
+      const d     = new Date(currentDate + 'T12:00:00');
+      const label = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+      document.getElementById('date-display').textContent =
+        currentDate === today ? label + ' (today)' : label;
+    } else {
+      document.getElementById('date-display').textContent = 'No dates';
+    }
+  }
+
+  function goDate(dir) {
+    // dir: -1 = Prev (older date = higher index in desc array)
+    //      +1 = Next (newer date = lower index)
+    const idx    = availableDates.indexOf(currentDate);
+    if (idx < 0) return;
+    const newIdx = dir === -1 ? idx + 1 : idx - 1;
+    if (newIdx >= 0 && newIdx < availableDates.length) {
+      currentDate = availableDates[newIdx];
+      loadDate();
+    }
+  }
+
+  function goToday() {
+    currentDate = todayStr();
+    loadDate();
+  }
+
+  // ── Grid rendering ─────────────────────────────────────────────────────────
+  function renderGrid() {
+    const frames = filtered();
+    const total  = allFrames.length;
+    const shown  = frames.length;
+
+    if (total === 0) {
+      document.getElementById('counter').textContent = 'No pending frames for this day';
+    } else if (minConf > 0 && shown < total) {
+      document.getElementById('counter').textContent =
+        shown + ' of ' + total + ' shown (≥' + minConf.toFixed(2) + ' conf)';
+    } else {
+      document.getElementById('counter').textContent =
+        total + ' frame' + (total !== 1 ? 's' : '') + ' pending review';
+    }
+
+    const grid = document.getElementById('frames-grid');
+    grid.innerHTML = '';
+
+    if (frames.length === 0) {
+      grid.innerHTML = total === 0
+        ? '<div id="empty-state">🎉 All frames labeled for this day!</div>'
+        : '<div id="empty-state">No frames match the confidence filter.</div>';
+      return;
+    }
+    frames.forEach(f => grid.appendChild(makeCard(f)));
+  }
+
+  // ── Confidence filter ──────────────────────────────────────────────────────
+  function setConf(val) {
+    minConf = val;
+    document.querySelectorAll('.conf-btn').forEach(b =>
+      b.classList.toggle('active', parseFloat(b.dataset.conf) === val));
+    renderGrid();
+  }
+
+  // ── Box drawing ────────────────────────────────────────────────────────────
   function drawCardBox(img) {
     const x1 = +img.dataset.x1, y1 = +img.dataset.y1;
     const w  = +img.dataset.w,  h  = +img.dataset.h;
@@ -1564,48 +1779,19 @@ REVIEW_HTML = """<!DOCTYPE html>
     ctx.strokeRect(x1 * sx, y1 * sy, w * sx, h * sy);
   }
 
-  async function labelFrame(card, framePath, label, predictedClass, confidence) {
-    card.querySelectorAll('.label-btn').forEach(b => b.disabled = true);
-    try {
-      const res = await fetch('/api/frames/label', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          frame_path:      framePath,
-          label:           label,
-          predicted_class: predictedClass,
-          confidence:      confidence,
-        }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        pendingCount--;
-        updateCounter();
-        card.classList.add('card-exiting');
-        card.addEventListener('animationend', () => {
-          card.remove();
-          if (pendingCount === 0) showEmptyState();
-        }, { once: true });
-      } else {
-        card.querySelectorAll('.label-btn').forEach(b => b.disabled = false);
-      }
-    } catch {
-      card.querySelectorAll('.label-btn').forEach(b => b.disabled = false);
-    }
-  }
-
+  // ── Card creation ──────────────────────────────────────────────────────────
   function ago(isoStr) {
     if (!isoStr) return '';
     const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
-    if (diff < 60)   return diff + 's ago';
-    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 60)    return diff + 's ago';
+    if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
     if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
     return Math.floor(diff / 86400) + 'd ago';
   }
 
   function makeCard(f) {
-    const cls  = (f.predicted_class || '').toLowerCase();
-    const conf = f.confidence ? Math.round(parseFloat(f.confidence) * 100) + '%' : '—';
+    const cls    = (f.predicted_class || '').toLowerCase();
+    const conf   = f.confidence ? Math.round(parseFloat(f.confidence) * 100) + '%' : '—';
     const clsCss = cls || 'unknown';
 
     const card = document.createElement('div');
@@ -1614,8 +1800,8 @@ REVIEW_HTML = """<!DOCTYPE html>
     card.innerHTML =
       '<div class="img-wrap">' +
         '<img src="' + f.image_url + '" alt="' + (cls || 'frame') + '" loading="lazy"' +
-             ' data-x1="' + (f.x1 || 0) + '" data-y1="' + (f.y1 || 0) + '"' +
-             ' data-w="'  + (f.w  || 0) + '" data-h="'  + (f.h  || 0) + '"' +
+             ' data-x1="' + (f.x1||0) + '" data-y1="' + (f.y1||0) + '"' +
+             ' data-w="'  + (f.w ||0) + '" data-h="'  + (f.h ||0) + '"' +
              ' data-cls="' + cls + '" onload="drawCardBox(this)">' +
         '<canvas class="bbox-canvas"></canvas>' +
       '</div>' +
@@ -1636,38 +1822,71 @@ REVIEW_HTML = """<!DOCTYPE html>
       labelFrame(card, f.frame_path, 'not_squirrel', f.predicted_class, f.confidence));
 
     card.querySelector('.img-wrap').addEventListener('click', () => {
-      const img = card.querySelector('img');
-      openLb(img, {
-        x1: +(f.x1 || 0), y1: +(f.y1 || 0),
-        w:  +(f.w  || 0), h:  +(f.h  || 0), cls,
+      openLb(card.querySelector('img'), {
+        x1: +(f.x1||0), y1: +(f.y1||0), w: +(f.w||0), h: +(f.h||0), cls,
       });
     });
 
     return card;
   }
 
-  function updateCounter() {
-    document.getElementById('counter').textContent =
-      pendingCount === 0
-        ? 'All done!'
-        : pendingCount + ' frame' + (pendingCount !== 1 ? 's' : '') + ' pending review';
+  // ── Labeling ───────────────────────────────────────────────────────────────
+  async function labelFrame(card, framePath, label, predictedClass, confidence) {
+    card.querySelectorAll('.label-btn').forEach(b => b.disabled = true);
+    try {
+      const res = await fetch('/api/frames/label', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ frame_path: framePath, label, predicted_class: predictedClass, confidence }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        allFrames = allFrames.filter(f => f.frame_path !== framePath);
+        currentStats.labeled_count = (currentStats.labeled_count || 0) + 1;
+        currentStats.pending_count = Math.max(0, (currentStats.pending_count || 0) - 1);
+        if (currentStats.class_distribution && predictedClass) {
+          const cls = predictedClass.toLowerCase();
+          currentStats.class_distribution[cls] =
+            Math.max(0, (currentStats.class_distribution[cls] || 0) - 1);
+        }
+        renderMetrics(currentStats);
+        card.classList.add('card-exiting');
+        card.addEventListener('animationend', () => { card.remove(); renderGrid(); }, { once: true });
+      } else {
+        card.querySelectorAll('.label-btn').forEach(b => b.disabled = false);
+      }
+    } catch {
+      card.querySelectorAll('.label-btn').forEach(b => b.disabled = false);
+    }
   }
 
-  function showEmptyState() {
-    document.getElementById('frames-grid').innerHTML =
-      '<div id="empty-state">🎉 All frames labeled! Great work.</div>';
+  // ── Load a day ─────────────────────────────────────────────────────────────
+  async function loadDate() {
+    renderDateNav();
+    let data;
+    try {
+      const qs = currentDate ? '?date=' + encodeURIComponent(currentDate) : '';
+      data = await (await fetch('/api/frames/pending' + qs)).json();
+    } catch {
+      document.getElementById('frames-grid').innerHTML =
+        '<div id="empty-state">Could not load frames — is the server running?</div>';
+      return;
+    }
+    allFrames    = data.frames || [];
+    currentStats = data.stats  || {};
+    renderMetrics(currentStats);
+    renderGrid();
   }
 
-  // ── Lightbox with pinch-to-zoom ──────────────────────────────────────────
+  // ── Lightbox ───────────────────────────────────────────────────────────────
   let _lbScale = 1, _lbX = 0, _lbY = 0;
   let _lbImgData = null;
   let _lbTouchDist = 0, _lbTouchMid = null, _lbScaleStart = 1, _lbPosStart = null;
-  let _lbDragStart = null;
-  let _lbLastTap = 0;
+  let _lbDragStart = null, _lbLastTap = 0;
 
   function _lbApply() {
-    const c = document.getElementById('lb-container');
-    c.style.transform = `translate(calc(-50% + ${_lbX}px), calc(-50% + ${_lbY}px)) scale(${_lbScale})`;
+    document.getElementById('lb-container').style.transform =
+      `translate(calc(-50% + ${_lbX}px), calc(-50% + ${_lbY}px)) scale(${_lbScale})`;
   }
 
   function _lbDrawBox() {
@@ -1686,8 +1905,7 @@ REVIEW_HTML = """<!DOCTYPE html>
   }
 
   function openLb(imgEl, data) {
-    _lbImgData = data;
-    _lbScale = 1; _lbX = 0; _lbY = 0;
+    _lbImgData = data; _lbScale = 1; _lbX = 0; _lbY = 0;
     const img = document.getElementById('lb-image');
     img.onload = () => {
       img.style.width  = img.naturalWidth  + 'px';
@@ -1709,30 +1927,18 @@ REVIEW_HTML = """<!DOCTYPE html>
     _lbImgData = null;
   }
 
-  function _dist(t) {
-    const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
-    return Math.hypot(dx, dy);
-  }
-  function _mid(t) {
-    return { x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 };
-  }
+  function _dist(t) { return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY); }
+  function _mid(t)  { return { x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 }; }
 
   const lbOv = document.getElementById('lb-overlay');
 
   lbOv.addEventListener('touchstart', e => {
     if (e.touches.length === 2) {
-      _lbTouchDist  = _dist(e.touches);
-      _lbTouchMid   = _mid(e.touches);
-      _lbScaleStart = _lbScale;
-      _lbPosStart   = { x: _lbX, y: _lbY };
-      _lbDragStart  = null;
+      _lbTouchDist = _dist(e.touches); _lbTouchMid = _mid(e.touches);
+      _lbScaleStart = _lbScale; _lbPosStart = { x: _lbX, y: _lbY }; _lbDragStart = null;
     } else if (e.touches.length === 1) {
-      // Double-tap to reset
       const now = Date.now();
-      if (now - _lbLastTap < 300) {
-        _lbScale = 1; _lbX = 0; _lbY = 0; _lbApply();
-        _lbLastTap = 0; return;
-      }
+      if (now - _lbLastTap < 300) { _lbScale = 1; _lbX = 0; _lbY = 0; _lbApply(); _lbLastTap = 0; return; }
       _lbLastTap   = now;
       _lbDragStart = { x: e.touches[0].clientX - _lbX, y: e.touches[0].clientY - _lbY };
     }
@@ -1741,10 +1947,8 @@ REVIEW_HTML = """<!DOCTYPE html>
   lbOv.addEventListener('touchmove', e => {
     e.preventDefault();
     if (e.touches.length === 2) {
-      const d = _dist(e.touches);
-      const m = _mid(e.touches);
+      const d = _dist(e.touches), m = _mid(e.touches);
       _lbScale = Math.max(0.5, Math.min(10, _lbScaleStart * (d / _lbTouchDist)));
-      // Pan so the pinch midpoint stays fixed on screen
       _lbX = _lbPosStart.x + (m.x - _lbTouchMid.x);
       _lbY = _lbPosStart.y + (m.y - _lbTouchMid.y);
       _lbApply();
@@ -1757,40 +1961,42 @@ REVIEW_HTML = """<!DOCTYPE html>
 
   lbOv.addEventListener('touchend', e => {
     if (e.touches.length < 2) { _lbTouchDist = 0; _lbTouchMid = null; }
-    if (e.touches.length < 1) _lbDragStart = null;
-    // Tap on overlay background (not the image) to close
+    if (e.touches.length < 1)  _lbDragStart = null;
     if (e.changedTouches.length === 1 && e.touches.length === 0) {
       const t = e.changedTouches[0];
       if (t.target === lbOv && Math.abs(_lbX) < 4 && Math.abs(_lbY) < 4 && _lbScale < 1.05) closeLb();
     }
   }, { passive: true });
 
-  // Mouse wheel zoom (desktop)
   lbOv.addEventListener('wheel', e => {
     e.preventDefault();
     _lbScale = Math.max(0.5, Math.min(10, _lbScale * (e.deltaY < 0 ? 1.12 : 0.89)));
     _lbApply();
   }, { passive: false });
 
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLb(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeLb(); return; }
+    if (!document.getElementById('lb-overlay').classList.contains('open')) {
+      if (e.key === 'ArrowLeft')  goDate(-1);
+      if (e.key === 'ArrowRight') goDate(1);
+    }
+  });
 
+  // ── Boot ───────────────────────────────────────────────────────────────────
   async function init() {
-    let data;
     try {
-      data = await (await fetch('/api/frames/pending')).json();
+      const datesData = await (await fetch('/api/frames/dates')).json();
+      availableDates  = (datesData.dates || []).map(d => d.date);
     } catch {
-      document.getElementById('frames-grid').innerHTML =
-        '<div id="empty-state">Could not load frames — is the server running?</div>';
-      return;
+      availableDates = [];
     }
-    pendingCount = data.count;
-    updateCounter();
-    if (data.count === 0) {
-      showEmptyState();
-      return;
-    }
-    const grid = document.getElementById('frames-grid');
-    data.frames.forEach(f => grid.appendChild(makeCard(f)));
+
+    const today = todayStr();
+    currentDate = availableDates.includes(today)
+      ? today
+      : (availableDates.length > 0 ? availableDates[0] : today);
+
+    await loadDate();
   }
 
   init();

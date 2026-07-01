@@ -34,6 +34,8 @@ FRAMES_DIR = Path(os.environ.get("FRAMES_DIR", "frames"))
 LOG_THRESHOLD  = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.45"))
 # Threshold above which a detection is considered a reliable true positive
 HIGH_CONF_THRESHOLD = float(os.environ.get("HIGH_CONF_THRESHOLD", "0.70"))
+# Confidence required to trigger spray (also used for "Squirrels Today" stat)
+SPRAY_CONFIDENCE_THRESHOLD = float(os.environ.get("SPRAY_CONFIDENCE_THRESHOLD", "0.80"))
 
 CORRECTIONS_PATH   = LOG_DIR / "corrections.csv"
 CORRECTION_FIELDS  = ["flagged_at", "detection_timestamp", "class", "confidence", "frame_path"]
@@ -192,7 +194,11 @@ def get_frame_dates():
 
 @app.get("/api/config")
 def get_config():
-    return {"log_threshold": LOG_THRESHOLD, "high_conf_threshold": HIGH_CONF_THRESHOLD}
+    return {
+        "log_threshold": LOG_THRESHOLD,
+        "high_conf_threshold": HIGH_CONF_THRESHOLD,
+        "spray_confidence_threshold": SPRAY_CONFIDENCE_THRESHOLD,
+    }
 
 
 @app.get("/api/detections")
@@ -515,23 +521,29 @@ HTML = """<!DOCTYPE html>
     #zone-canvas {
       position: absolute; top: 0; left: 0;
       width: 100%; height: 100%;
-      cursor: crosshair;
+      cursor: default; pointer-events: none;
     }
+    #zone-canvas.editing { cursor: crosshair; pointer-events: auto; }
 
     .zone-controls {
       padding: 10px 14px 12px;
-      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
       border-top: 1px solid rgba(0,180,216,0.18);
     }
-    .zone-hint { font-size: 0.72rem; color: #888; font-weight: 700; font-style: italic; flex: 1; min-width: 100px; }
-    #zone-save-btn, #zone-clear-btn {
-      padding: 7px 16px; border-radius: 12px; border: none;
+    .zone-hint { font-size: 0.72rem; color: #888; font-weight: 700; font-style: italic; flex: 1; min-width: 80px; }
+    #zone-save-btn, #zone-clear-btn, #zone-edit-btn, #zone-lock-btn, #zone-toggle-btn {
+      padding: 6px 13px; border-radius: 12px; border: none;
       font-family: 'Nunito', sans-serif; font-size: 0.82rem; font-weight: 900;
-      cursor: pointer; min-height: 36px;
+      cursor: pointer; min-height: 34px;
     }
     #zone-save-btn  { background: linear-gradient(135deg, #15803d, #22c55e); color: white; }
     #zone-save-btn:disabled { opacity: 0.4; cursor: default; }
     #zone-clear-btn { background: linear-gradient(135deg, #9f1239, #f43f5e); color: white; }
+    #zone-edit-btn  { background: linear-gradient(135deg, #0369a1, #38bdf8); color: white; }
+    #zone-lock-btn  { background: linear-gradient(135deg, #78350f, #f59e0b); color: white; }
+    #zone-toggle-btn { background: rgba(0,180,216,0.15); color: var(--navy); border: 1px solid rgba(0,180,216,0.3); }
+    .zone-edit-group { display: none; align-items: center; gap: 8px; }
+    .zone-edit-group.visible { display: flex; }
     #zone-status { font-size: 0.78rem; font-weight: 700; color: #aaa; }
     #zone-status.ok  { color: #16a34a; }
     #zone-status.err { color: #dc2626; }
@@ -774,7 +786,9 @@ HTML = """<!DOCTYPE html>
         <div class="live-dot"></div>
         <span class="live-label">LIVE</span>
         <span style="flex:1"></span>
-        <span>🎯 Drag to set feeder zone</span>
+        <button id="zone-toggle-btn" onclick="toggleZoneVisibility()" style="margin-right:4px">Hide Zone</button>
+        <button id="zone-edit-btn" onclick="toggleZoneEdit()">Edit Zone</button>
+        <button id="zone-lock-btn" onclick="toggleZoneEdit()" style="display:none">Lock Zone</button>
       </div>
       <div id="stream-wrap">
         <img id="stream-img" src="/api/stream" alt="Live feed"
@@ -786,9 +800,11 @@ HTML = """<!DOCTYPE html>
         <span>Camera offline</span>
       </div>
       <div class="zone-controls">
-        <span class="zone-hint">Click and drag above to define the feeder area</span>
-        <button id="zone-save-btn" onclick="saveZone()" disabled>Save Zone</button>
-        <button id="zone-clear-btn" onclick="clearZone()">Clear</button>
+        <span class="zone-hint" id="zone-hint">Zone locked — click Edit Zone to change</span>
+        <div class="zone-edit-group" id="zone-edit-group">
+          <button id="zone-save-btn" onclick="saveZone()" disabled>Save Zone</button>
+          <button id="zone-clear-btn" onclick="clearZone()">Clear</button>
+        </div>
         <span id="zone-status"></span>
       </div>
     </div>
@@ -799,7 +815,7 @@ HTML = """<!DOCTYPE html>
         <div class="stats-grid">
           <div class="stat">
             <div class="stat-num" id="squirrel-count">—</div>
-            <div class="stat-label">🐿️ Squirrels Today</div>
+            <div class="stat-label">🐿️ Squirrels Today <span id="squirrel-conf-label" style="opacity:0.7;font-size:0.6rem"></span></div>
           </div>
           <div class="stat">
             <div class="stat-num" id="last-seen" style="font-size:1.25rem">—</div>
@@ -896,6 +912,8 @@ HTML = """<!DOCTYPE html>
 
   // ── Zone picker ──────────────────────────────────────────────────────────
   let _feederZone = null, _zoneStart = null, _zoneDraft = null;
+  let _zoneEditing = false;
+  let _showZone    = true;
 
   async function loadFeederZone() {
     try {
@@ -908,6 +926,7 @@ HTML = """<!DOCTYPE html>
     const canvas = document.getElementById('zone-canvas');
     const ctx    = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!_showZone && !_zoneEditing) return;
     const zone = _zoneDraft || _feederZone;
     if (!zone) return;
     const x1 = zone.x1 * canvas.width,  y1 = zone.y1 * canvas.height;
@@ -936,11 +955,12 @@ HTML = """<!DOCTYPE html>
     const canvas = document.getElementById('zone-canvas');
 
     canvas.addEventListener('mousedown', e => {
+      if (!_zoneEditing) return;
       _zoneStart = _frac(e.clientX, e.clientY, canvas);
       _zoneDraft = null; e.preventDefault();
     });
     canvas.addEventListener('mousemove', e => {
-      if (!_zoneStart) return;
+      if (!_zoneEditing || !_zoneStart) return;
       const p = _frac(e.clientX, e.clientY, canvas);
       _zoneDraft = {
         x1: Math.min(_zoneStart.x, p.x), y1: Math.min(_zoneStart.y, p.y),
@@ -953,12 +973,13 @@ HTML = """<!DOCTYPE html>
     canvas.addEventListener('mouseleave', () => { _zoneStart = null; });
 
     canvas.addEventListener('touchstart', e => {
+      if (!_zoneEditing) return;
       const t = e.touches[0];
       _zoneStart = _frac(t.clientX, t.clientY, canvas);
       _zoneDraft = null; e.preventDefault();
     }, { passive: false });
     canvas.addEventListener('touchmove', e => {
-      if (!_zoneStart) return;
+      if (!_zoneEditing || !_zoneStart) return;
       const t = e.touches[0];
       const p = _frac(t.clientX, t.clientY, canvas);
       _zoneDraft = {
@@ -976,6 +997,38 @@ HTML = """<!DOCTYPE html>
       document.getElementById('zone-status').className  = 'ok';
     }
     drawZoneCanvas();
+  }
+
+  function toggleZoneEdit() {
+    _zoneEditing = !_zoneEditing;
+    const canvas   = document.getElementById('zone-canvas');
+    const editBtn  = document.getElementById('zone-edit-btn');
+    const lockBtn  = document.getElementById('zone-lock-btn');
+    const editGrp  = document.getElementById('zone-edit-group');
+    const hint     = document.getElementById('zone-hint');
+    if (_zoneEditing) {
+      canvas.classList.add('editing');
+      editBtn.style.display = 'none';
+      lockBtn.style.display = '';
+      editGrp.classList.add('visible');
+      hint.textContent = 'Drag on the image to define the feeder area';
+    } else {
+      _zoneStart = null; _zoneDraft = null;
+      canvas.classList.remove('editing');
+      editBtn.style.display = '';
+      lockBtn.style.display = 'none';
+      editGrp.classList.remove('visible');
+      hint.textContent = 'Zone locked — click Edit Zone to change';
+      document.getElementById('zone-save-btn').disabled = true;
+      drawZoneCanvas();
+    }
+  }
+
+  function toggleZoneVisibility() {
+    _showZone = !_showZone;
+    document.getElementById('zone-toggle-btn').textContent = _showZone ? 'Hide Zone' : 'Show Zone';
+    drawZoneCanvas();
+    document.querySelectorAll('.det-card img[data-x1]').forEach(img => { if (img.complete) drawBox(img); });
   }
 
   async function saveZone() {
@@ -1015,7 +1068,8 @@ HTML = """<!DOCTYPE html>
   let currentWindow  = 60;
   let currentFilter  = 'all';
   let highConfOnly   = false;
-  let highConfThresh = 0.70;
+  let highConfThresh  = 0.70;
+  let sprayConfThresh = 0.80;
   let allData = [];
   let lbData  = null;
   const flaggedSet = new Set();
@@ -1086,7 +1140,7 @@ HTML = """<!DOCTYPE html>
       const n    = new Date();
       const mins = n.getHours() * 60 + n.getMinutes() + 1;
       const data = await (await fetch('/api/detections?minutes=' + mins)).json();
-      const squirrels = data.filter(d => d.class === 'squirrel');
+      const squirrels = data.filter(d => d.class === 'squirrel' && parseFloat(d.confidence) >= sprayConfThresh);
       document.getElementById('squirrel-count').textContent = squirrels.length || '0';
       const last = squirrels[0];
       document.getElementById('last-seen').textContent = last ? ago(last.timestamp) : 'None today';
@@ -1128,7 +1182,7 @@ HTML = """<!DOCTYPE html>
     const sx = img.clientWidth  / img.naturalWidth;
     const sy = img.clientHeight / img.naturalHeight;
     const ctx = canvas.getContext('2d');
-    if (_feederZone) {
+    if (_feederZone && _showZone) {
       ctx.strokeStyle = 'rgba(255,209,102,0.5)';
       ctx.lineWidth = 1; ctx.setLineDash([4, 2]);
       ctx.strokeRect(
@@ -1351,8 +1405,10 @@ HTML = """<!DOCTYPE html>
   async function init() {
     try {
       const cfg = await (await fetch('/api/config')).json();
-      highConfThresh = cfg.high_conf_threshold;
+      highConfThresh  = cfg.high_conf_threshold;
+      sprayConfThresh = cfg.spray_confidence_threshold ?? 0.80;
       document.getElementById('hc-label').textContent = Math.round(highConfThresh * 100);
+      document.getElementById('squirrel-conf-label').textContent = '≥' + Math.round(sprayConfThresh * 100) + '%';
     } catch {}
     await loadFeederZone();
     initZonePicker();

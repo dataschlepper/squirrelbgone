@@ -88,9 +88,13 @@ sudo systemctl start  squirrelbgone-api squirrelbgone-detect
 journalctl -u squirrelbgone-detect -f
 journalctl -u squirrelbgone-api -f
 
-# Restart after code change (add alias to ~/.bashrc for convenience)
+# Deploy after a code change: pull + sync service files + restart
+# Add to ~/.bashrc for convenience:
+alias sbg-deploy='cd ~/squirrelbgone && scripts/deploy.sh'
+sbg-deploy
+
+# Quick restart only (no pull, no service file sync)
 alias sbg-restart='sudo systemctl restart squirrelbgone-detect squirrelbgone-api'
-sbg-restart
 ```
 
 ---
